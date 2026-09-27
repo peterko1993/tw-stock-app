@@ -1,0 +1,19 @@
+[
+  {
+    "code": "4915",
+    "name": "致伸            ",
+    "ticker": "4915.TW",
+    "entry_date": "2026-09-27",
+    "entry_price": 64.1,
+    "total_invested": 199942.05728624997,
+    "shares_a": 1558,
+    "shares_b": 1559,
+    "days_held": 0,
+    "is_breakeven": false,
+    "lot_a_sold": false,
+    "lot_a_revenue": 0.0,
+    "lot_a_pnl_pct": 0.0,
+    "curr_price": 64.1,
+    "unrealized_pct": 0.0
+  }
+]
