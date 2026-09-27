@@ -39,10 +39,18 @@ def save_watchlist(data):
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = load_watchlist()
 
-# ================= 側邊欄：觀察清單動態管理 =================
+# ================= 側邊欄：參數設定與名單管理 =================
 with st.sidebar:
-    st.header("⚙️ 觀察清單管理")
-    
+    st.header("🎛️ 策略參數動態微調")
+    with st.expander("⚙️ 調整進出場判定數值", expanded=True):
+        buffer_pct = st.slider("均線回測容許緩衝 (%)", 0.5, 3.0, 1.2, 0.1, help="價格下探至均線的容許誤差範圍")
+        k_body_limit = st.slider("K棒實體最大振幅 (%)", 1.0, 5.0, 2.5, 0.5, help="過濾大實體黑棒，只留小碎步洗盤")
+        vol_mode = st.radio("成交量萎縮標準", ["嚴格（低於 5MV 且 20MV）", "標準（低於 5MV 或 20MV）"], index=0)
+        stop_loss_pct = st.slider("硬停損比例 (-%)", 2.0, 8.0, 4.0, 0.5)
+        take_profit_pct = st.slider("第一階段停利目標 (+%)", 5.0, 15.0, 8.0, 0.5)
+
+    st.divider()
+    st.header("📋 觀察清單管理")
     with st.expander("➕ 新增自選股票", expanded=False):
         new_name = st.text_input("股票名稱", placeholder="例如：金像電")
         new_code = st.text_input("4 碼代號", placeholder="例如：2368")
@@ -79,17 +87,21 @@ with st.sidebar:
         st.rerun()
 
 st.title("📈 短線成長股・量縮深蹲指示器")
-st.caption("盤後全自動體檢｜均線多頭排列・回測 10MA/20MA 支撐・成交量窒息診斷")
+st.caption(f"動態設定中：停損 -{stop_loss_pct}% ｜ 停利 +{take_profit_pct}% ｜ K棒上限 {k_body_limit}%")
 
-# 主頁面兩大功能分頁
-tab_batch, tab_single = st.tabs(["🚀 一鍵全清單自動掃描", "🔍 個股深入技術體檢"])
+# 主頁面三大功能分頁
+tab_batch, tab_single, tab_docs = st.tabs([
+    "🚀 一鍵全清單自動掃描", 
+    "🔍 個股深入技術體檢", 
+    "📖 策略手冊與 SOP 指南"
+])
 
 # ================= TAB 1: 一鍵批次全掃描 =================
 with tab_batch:
     st.subheader("📋 自選股今日深蹲訊號掃描")
-    st.write(f"目前清單共有 **{len(st.session_state.watchlist)}** 檔股票待檢驗。")
+    st.write(f"目前清單待檢驗數量：**{len(st.session_state.watchlist)}** 檔")
     
-    scan_btn = st.button("⚡ 開始掃描全部自選股", type="primary", use_container_width=True)
+    scan_btn = st.button("⚡ 開始套用自訂參數掃描全部自選股", type="primary", use_container_width=True)
     
     if scan_btn:
         progress_text = st.empty()
@@ -127,33 +139,40 @@ with tab_batch:
                 vol_ma5 = float(latest['VOL_MA5'])
                 vol_ma20 = float(latest['VOL_MA20'])
 
-                # 判定邏輯
+                # 動態條件判定
                 cond_trend = (ma5 > ma10) and (ma10 > ma20) and (ma20 > df['MA20'].iloc[-4])
-                touch_10 = (low <= ma10 * 1.012) and (close >= ma10 * 0.99)
-                touch_20 = (low <= ma20 * 1.012) and (close >= ma20 * 0.99)
+                
+                buf = 1 + (buffer_pct / 100)
+                touch_10 = (low <= ma10 * buf) and (close >= ma10 * 0.99)
+                touch_20 = (low <= ma20 * buf) and (close >= ma20 * 0.99)
                 cond_support = touch_10 or touch_20
-                cond_vol = (vol < vol_ma5) and (vol < vol_ma20)
-                cond_k = abs(close - open_p) / open_p <= 0.035
+                
+                if "嚴格" in vol_mode:
+                    cond_vol = (vol < vol_ma5) and (vol < vol_ma20)
+                else:
+                    cond_vol = (vol < vol_ma5) or (vol < vol_ma20)
+                    
+                cond_k = (abs(close - open_p) / open_p * 100) <= k_body_limit
 
-                support_name = "10MA" if touch_10 else ("20MA" if touch_20 else "無支撐")
+                support_name = "10MA" if touch_10 else ("20MA" if touch_20 else "未回踩")
                 target_ma = ma10 if touch_10 else ma20
 
                 if cond_trend and cond_support and cond_vol and cond_k:
                     triggered_list.append({
                         "股票標的": label,
                         "最新收盤": f"${close:,.1f}",
-                        "踩到均線": support_name,
-                        "建議進場區間": f"\({target_ma:,.1f} ~\){close:,.1f}",
-                        "硬停損價 (-4%)": f"${target_ma * 0.96:,.1f}",
-                        "停利目標 (+8%)": f"${close * 1.08:,.1f}",
-                        "成交量": f"{int(vol):,d}"
+                        "回踩均線": support_name,
+                        "建議掛單區間": f"\({target_ma:,.1f} ~\){close:,.1f}",
+                        f"硬停損 (-{stop_loss_pct}%)": f"${target_ma * (1 - stop_loss_pct/100):,.1f}",
+                        f"目標價 (+{take_profit_pct}%)": f"${close * (1 + take_profit_pct/100):,.1f}",
+                        "當日量": f"{int(vol):,d}"
                     })
                 else:
                     reasons = []
                     if not cond_trend: reasons.append("均線非多頭")
-                    if not cond_support: reasons.append("未踩 10/20MA")
-                    if not cond_vol: reasons.append("未達窒息量")
-                    if not cond_k: reasons.append("實體黑棒過大")
+                    if not cond_support: reasons.append(f"未達 {buffer_pct}% 緩衝回踩")
+                    if not cond_vol: reasons.append("成交量未達萎縮")
+                    if not cond_k: reasons.append(f"K棒實體 > {k_body_limit}%")
                     
                     waiting_list.append({
                         "股票標的": label,
@@ -173,30 +192,26 @@ with tab_batch:
         progress_text.empty()
         progress_bar.empty()
 
-        # 輸出掃描成果
         if triggered_list:
             st.success(f"🎯 **今日共發現 {len(triggered_list)} 檔符合「量縮深蹲」進場門檻！**")
             st.dataframe(pd.DataFrame(triggered_list), use_container_width=True, hide_index=True)
         else:
-            st.warning(" 今日自選股中無標的同時滿足全部深蹲條件，建議維持空手等待。")
+            st.warning(" 今日自選股中無標的符合設定之條件，建議維持空手觀望。")
 
         if waiting_list:
-            with st.expander("👀 查看其餘觀察中股票狀態（未滿足條件清單）", expanded=True):
+            with st.expander("👀 查看其餘觀察中股票狀態（未符合原因清單）", expanded=True):
                 st.dataframe(pd.DataFrame(waiting_list), use_container_width=True, hide_index=True)
 
 # ================= TAB 2: 單一個股詳細技術體檢 =================
 with tab_single:
-    st.subheader("🔍 個股進階診斷與 K 線圖")
+    st.subheader("🔍 個股深入技術診斷與 K 線走勢")
     options_list = list(st.session_state.watchlist.keys()) + ["✏️ 臨時手動輸入其他代號"]
-    
     selected_option = st.selectbox("選擇診斷標的：", options=options_list, index=0)
     
     if selected_option == "✏️ 臨時手動輸入其他代號":
         c1, c2 = st.columns([2, 1])
-        with c1:
-            custom_code = st.text_input("輸入 4 位數代號", value="2308")
-        with c2:
-            market_suffix = st.selectbox("市場別", [".TW (上市)", ".TWO (上櫃)"], index=0)
+        with c1: custom_code = st.text_input("輸入 4 位數代號", value="2308")
+        with c2: market_suffix = st.selectbox("市場別", [".TW (上市)", ".TWO (上櫃)"], index=0)
         suffix = ".TW" if "上市" in market_suffix else ".TWO"
         full_ticker = f"{custom_code.strip()}{suffix}"
         display_title = f"自訂標的 ({full_ticker})"
@@ -204,7 +219,7 @@ with tab_single:
         full_ticker = st.session_state.watchlist[selected_option]
         display_title = selected_option
 
-    target_ma_choice = st.radio("診斷指定防守均線", ["10MA", "20MA (月線)"], horizontal=True)
+    target_ma_choice = st.radio("指定防守均線基準", ["10MA", "20MA (月線)"], horizontal=True)
 
     if st.button("開始診斷該股", type="secondary", use_container_width=True):
         with st.spinner(f"正在分析 {display_title}..."):
@@ -233,10 +248,12 @@ with tab_single:
                 vol_ma20 = float(latest['VOL_MA20'])
 
                 target_ma = ma10 if "10MA" in target_ma_choice else ma20
+                buf = 1 + (buffer_pct / 100)
+                
                 cond_trend = (ma5 > ma10) and (ma10 > ma20) and (ma20 > df['MA20'].iloc[-4])
-                cond_support = (low <= target_ma * 1.012) and (close >= target_ma * 0.99)
-                cond_vol = (vol < vol_ma5) and (vol < vol_ma20)
-                cond_k = abs(close - open_p) / open_p <= 0.035
+                cond_support = (low <= target_ma * buf) and (close >= target_ma * 0.99)
+                cond_vol = (vol < vol_ma5) and (vol < vol_ma20) if "嚴格" in vol_mode else (vol < vol_ma5) or (vol < vol_ma20)
+                cond_k = (abs(close - open_p) / open_p * 100) <= k_body_limit
                 is_ready = cond_trend and cond_support and cond_vol and cond_k
 
                 c_out1, c_out2, c_out3 = st.columns(3)
@@ -245,11 +262,20 @@ with tab_single:
                 c_out3.metric("當日成交量", f"{int(vol):,d}")
 
                 if is_ready:
+                    sl_price = target_ma * (1 - stop_loss_pct / 100)
+                    tp_price = close * (1 + take_profit_pct / 100)
                     st.success(f"🎯 **【{display_title} 觸發訊號】：符合深蹲進場門檻！**")
-                    st.write(f"• 建議掛單區間：`\({target_ma:,.1f} ~\){close:,.1f}`")
-                    st.write(f"• 硬停損價 (-4%)：`${target_ma * 0.96:,.1f}`")
+                    st.write(f"• **建議掛單區間**：`\({target_ma:,.1f} ~\){close:,.1f}`")
+                    st.write(f"• **硬停損價 (-{stop_loss_pct}%)**：`${sl_price:,.1f}`")
+                    st.write(f"• **第一階段停利 (+{take_profit_pct}%)**：`${tp_price:,.1f}`（出脫 50% 部位）")
                 else:
                     st.info(f"⏸ **【{display_title} 維持觀望】：尚未滿足全部條件**")
+                    st.markdown(f"""
+                    * 均線多頭排列：{'✅ 符合' if cond_trend else '❌ 未成多頭'}
+                    * 回踩 {target_ma_choice}（緩衝 {buffer_pct}%）：{'✅ 有踩到且收上' if cond_support else '❌ 未達或已跌破'}
+                    * 成交量窒息量縮：{'✅ 符合萎縮' if cond_vol else '❌ 尚未量縮'}
+                    * K 棒實體振幅 \(\le\) {k_body_limit}%：{'✅ 健康小實體' if cond_k else '❌ 波動過大或長黑'}
+                    """)
 
                 fig = go.Figure()
                 fig.add_trace(go.Candlestick(
@@ -261,3 +287,11 @@ with tab_single:
                 fig.add_trace(go.Scatter(x=df.index[-60:], y=df['MA20'][-60:], line=dict(color='purple', width=2), name="20MA"))
                 fig.update_layout(xaxis_rangeslider_visible=False, height=420, margin=dict(l=10, r=10, t=10, b=10))
                 st.plotly_chart(fig, use_container_width=True)
+
+# ================= TAB 3: 策略手冊與 SOP 指南 =================
+with tab_docs:
+    st.subheader("📖 短線成長股・量縮深蹲 (Squat & Rebound) 作戰手冊")
+    
+    st.markdown("""
+    ### 一、 核心策略哲學
+    本策略專為**「不盯盤、盤後離線決策」**設計。核心在於捕捉法人買盤推升後，浮額洗淨、賣壓竭盡的「均線支撐深蹲點」，兼顧高勝算與極小虧損風險。
