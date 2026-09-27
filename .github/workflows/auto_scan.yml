@@ -31,6 +31,5 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add watchlist.json
-          # 如果檔案有變更才進行 commit 與 push
-          git diff --quiet && git diff --staged --quiet || (git commit -m "🤖 自動更新今日深蹲觀察名單 [skip ci]" && git push)
+          git add watchlist.json radar_report.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "🤖 自動更新今日深蹲觀察名單與戰報 [skip ci]" && git push)
