@@ -5,6 +5,10 @@ on:
     - cron: '30 8 * * 1-5'
   workflow_dispatch:
 
+# 授權 GitHub Actions 具備寫入儲存庫的權限
+permissions:
+  contents: write
+
 jobs:
   screen-and-track:
     runs-on: ubuntu-latest
@@ -33,5 +37,5 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add watchlist.json radar_report.json positions.json trade_history.csv
+          git add -A
           git diff --quiet && git diff --staged --quiet || (git commit -m "🤖 自動更新雷達戰報與實盤追蹤帳本 [skip ci]" && git push)
