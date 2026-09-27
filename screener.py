@@ -5,7 +5,6 @@ import yfinance as yf
 import json
 import os
 
-WATCHLIST_FILE = "watchlist.json"
 REPORT_FILE = "radar_report.json"
 
 headers = {
@@ -36,13 +35,11 @@ def run_screener():
         print("❌ 無法取得法人日報，終止執行。")
         return
 
-    # 1. 篩選投信買超 >= 50 張
     df_t86 = df_t86[df_t86['證券代號'].str.match(r'^\d{4}$')]
     trust_col = [c for c in df_t86.columns if "投信" in c and "買賣超" in c][0]
     df_t86['投信買賣超張數'] = df_t86[trust_col].str.replace(',', '').astype(float) / 1000
     df_step3 = df_t86[df_t86['投信買賣超張數'] >= 50][['證券代號', '證券名稱', '投信買賣超張數']].copy()
 
-    # 2. 比對股本 20 億 ~ 60 億
     print("📡 [2/4] 比對股本規模 (20億 ~ 60億)...")
     url_cap = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
     res_cap = requests.get(url_cap, headers=headers, timeout=10)
@@ -51,7 +48,6 @@ def run_screener():
     df_step1 = pd.merge(df_step3, df_cap, left_on='證券代號', right_on='公司代號', how='inner')
     df_step1 = df_step1[(df_step1['股本(億)'] >= 20.0) & (df_step1['股本(億)'] <= 60.0)]
 
-    # 3. 比對月營收 YoY > 20%
     print("📡 [3/4] 比對最新月營收 (YoY > 20%)...")
     url_rev = "https://openapi.twse.com.tw/v1/opendata/t187ap05_L"
     res_rev = requests.get(url_rev, headers=headers, timeout=10)
@@ -64,9 +60,8 @@ def run_screener():
 
     print(f"🎯 漏斗精選出 {len(df_funnel)} 檔強勢標的，開始技術面深蹲比對...")
 
-    # 4. 技術面深蹲檢驗並儲存詳細戰報
     report_items = []
-    new_watchlist = {}
+    total_squat_count = 0
 
     for _, row in df_funnel.iterrows():
         code = row['證券代號']
@@ -97,56 +92,39 @@ def run_screener():
             vol_ma20 = float(latest['VOL_MA20'])
 
             cond_trend = (ma5 > ma10) and (ma10 > ma20) and (ma20 > df_k['MA20'].iloc[-4])
-            touch_10 = (low <= ma10 * 1.015 and close >= ma10 * 0.99)
-            touch_20 = (low <= ma20 * 1.015 and close >= ma20 * 0.99)
+            touch_10 = (low <= ma10 * 1.018 and close >= ma10 * 0.99)
+            touch_20 = (low <= ma20 * 1.018 and close >= ma20 * 0.99)
             cond_support = touch_10 or touch_20
             cond_vol = (vol < vol_ma5) and (vol < vol_ma20)
             cond_k = abs(close - open_p) / open_p <= 0.035
 
             target_ma = ma10 if touch_10 else ma20
             support_name = "10MA" if touch_10 else ("20MA" if touch_20 else "無")
-
             is_squat = cond_trend and cond_support and cond_vol and cond_k
+            if is_squat: total_squat_count += 1
 
             item_data = {
-                "name": name,
-                "code": code,
-                "ticker": ticker,
-                "close": round(close, 1),
-                "trust_buy": int(row['投信買賣超張數']),
-                "cap": round(float(row['股本(億)']), 1),
-                "rev_yoy": round(float(row['營收YoY(%)']), 1),
-                "is_squat": bool(is_squat),
-                "support": support_name,
-                "buy_min": round(target_ma, 1),
-                "buy_max": round(close, 1),
-                "stop_loss": round(target_ma * 0.96, 1),
-                "take_profit": round(close * 1.08, 1)
+                "name": name, "code": code, "ticker": ticker,
+                "close": round(close, 1), "trust_buy": int(row['投信買賣超張數']),
+                "cap": round(float(row['股本(億)']), 1), "rev_yoy": round(float(row['營收YoY(%)']), 1),
+                "is_squat": bool(is_squat), "support": support_name,
+                "buy_min": round(target_ma, 1), "buy_max": round(close, 1),
+                "stop_loss": round(target_ma * 0.96, 1), "take_profit": round(close * 1.08, 1)
             }
             report_items.append(item_data)
-
-            if is_squat:
-                new_watchlist[f"{name} ({code})"] = ticker
         except Exception:
             continue
 
-    # 產出 radar_report.json 供 App 網頁直接讀取
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     report_data = {
-        "update_time": now_str,
-        "trade_date": trade_date,
-        "total_funnel": len(df_funnel),
-        "total_squat": len(new_watchlist),
+        "update_time": now_str, "trade_date": trade_date,
+        "total_funnel": len(df_funnel), "total_squat": total_squat_count,
         "stocks": report_items
     }
 
+    # 💡 核心修復：僅儲存 radar_report.json，絕對不覆寫使用者的 watchlist.json
     with open(REPORT_FILE, "w", encoding="utf-8") as f:
         json.dump(report_data, f, ensure_ascii=False, indent=2)
-
-    # 備用：若有深蹲股票才更新 watchlist.json
-    if new_watchlist:
-        with open(WATCHLIST_FILE, "w", encoding="utf-8") as f:
-            json.dump(new_watchlist, f, ensure_ascii=False, indent=2)
 
     print(f"✅ 戰報生成完畢！共記錄 {len(report_items)} 檔獵物至 {REPORT_FILE}")
 
