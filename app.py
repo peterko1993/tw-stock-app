@@ -13,10 +13,12 @@ REPORT_FILE = "radar_report.json"
 POSITIONS_FILE = "positions.json"
 HISTORY_FILE = "trade_history.csv"
 
+# 經典預設自選股池
 DEFAULT_STOCKS = {
     "台積電 (2330)": "2330.TW", "聯發科 (2454)": "2454.TW",
     "欣興 (3037)": "3037.TW", "奇鋐 (3017)": "3017.TW",
-    "雙鴻 (3324)": "3324.TWO", "台燿 (6274)": "6274.TWO"
+    "雙鴻 (3324)": "3324.TWO", "台燿 (6274)": "6274.TWO",
+    "智邦 (2345)": "2345.TW", "金像電 (2368)": "2368.TW"
 }
 
 def load_json(filepath, default):
@@ -54,8 +56,12 @@ with st.sidebar:
         be_threshold = st.slider("動態保本啟動點 (+%)", 2.5, 6.0, 4.0, 0.5)
         stop_loss_pct = st.slider("硬停損比例 (-%)", 2.0, 8.0, 4.0, 0.5)
         take_profit_pct = st.slider("階段一停利目標 (+%)", 5.0, 15.0, 8.0, 0.5)
+
+    with st.expander("⚙️ 技術面閥值設定", expanded=False):
         buffer_pct = st.slider("均線回測緩衝 (%)", 0.5, 3.0, 1.8, 0.1)
         k_body_limit = st.slider("K棒實體振幅上限 (%)", 1.0, 5.0, 3.5, 0.5)
+        # 💡 修復點：確保 vol_mode 必定宣告存在
+        vol_mode = st.radio("成交量萎縮標準", ["嚴格（低於 5MV 且 20MV）", "標準（低於 5MV 或 20MV）"], index=0)
 
     st.header("📋 觀察名單管理")
     with st.expander("➕ 新增自選股票", expanded=False):
@@ -80,6 +86,13 @@ with st.sidebar:
                 save_json(WATCHLIST_FILE, st.session_state.watchlist)
                 st.success(f"已移除：{del_target}")
                 st.rerun()
+
+    # 💡 修復點：一鍵恢復預設自選清單按鈕
+    if st.button("🔄 恢復初始預設名單", use_container_width=True):
+        st.session_state.watchlist = DEFAULT_STOCKS.copy()
+        save_json(WATCHLIST_FILE, st.session_state.watchlist)
+        st.success("已還原預設自選清單！")
+        st.rerun()
 
 # 頂部大盤環境狀態
 st.title("📈 短線成長股・量縮深蹲指示器 V2.0")
@@ -122,9 +135,8 @@ with tab_radar:
                     c1.markdown(f"### **{s['name']} ({s['code']})**")
                     c1.caption(f"最新收盤：${s['close']} ｜ 支撐：{s['support']}")
                     c2.write(f"• 投信買超：`+{s['trust_buy']}` 張 ｜ 營收 YoY：`+{s['rev_yoy']}%`")
-                    c3.write(f"• 建議掛單區間：`\({s['buy_min']} ~\){s['buy_max']}` ｜ 停損：`${s['stop_loss']}`")
+                    c3.write(f"• 建議掛單區間：`${s['buy_min']} ~ ${s['buy_max']}` ｜ 停損：`${s['stop_loss']}`")
                     
-                    # 💡 功能 1：雷達標的一鍵加入觀察清單
                     label_key = f"{s['name']} ({s['code']})"
                     if label_key not in st.session_state.watchlist:
                         if c4.button(f"📥 加到自選名單", key=f"radar_add_{s['code']}"):
@@ -179,7 +191,6 @@ with tab_tracker:
             })
         st.dataframe(pd.DataFrame(pos_display), use_container_width=True, hide_index=True)
         
-        # 💡 功能 2：手動刪除未實際建倉之虛擬部位
         with st.expander("🗑️ 手動刪除未建倉或誤入之虛擬部位", expanded=False):
             st.warning("若你在真實帳戶中並未買進該檔股票，可在此將其從虛擬帳本中剔除，以釋放槽位空間。")
             del_pos_target = st.selectbox("選擇要刪除的在倉部位", options=[f"{p['name']} ({p['code']})" for p in positions])
@@ -192,11 +203,9 @@ with tab_tracker:
         st.info("目前無在倉持股，現金池 100% 待命。")
 
     st.write("---")
-
     st.markdown("#### 📋 【歷史結案明細表】")
     if not df_history.empty:
         st.dataframe(df_history, use_container_width=True, hide_index=True)
-        
         st.markdown("#### 📈 【實盤績效視覺化儀表板】")
         fig = make_subplots(
             rows=2, cols=2,
@@ -228,6 +237,8 @@ with tab_tracker:
 # ================= TAB 2: 自選名單批次體檢 =================
 with tab_batch:
     st.subheader("📋 自選股今日深蹲訊號掃描")
+    st.write(f"目前自選名單中共有 **{len(st.session_state.watchlist)}** 檔標的。")
+    
     if st.button("⚡ 開始全自選股技術體檢", type="primary", use_container_width=True):
         if not is_bull and use_market_filter:
             st.warning("⚠️ 提醒：目前大盤偏弱，即使自選股出現訊號，也請控制部位（建議至多單筆 10~12 萬）。")
