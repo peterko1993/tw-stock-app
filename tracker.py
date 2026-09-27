@@ -33,7 +33,7 @@ def run_tracker():
     positions = load_json(POSITIONS_FILE, [])
     report = load_json(REPORT_FILE, {})
     
-    # 載入歷史結案紀錄
+    # 載入歷史結案紀錄（若不存在則立刻建立空表頭防呆）
     if os.path.exists(HISTORY_FILE):
         df_history = pd.read_csv(HISTORY_FILE)
     else:
@@ -42,6 +42,7 @@ def run_tracker():
             "投入金額", "回收金額", "淨損益(NTD)", "部位A_損益%", "部位B_損益%",
             "綜合報酬率%", "出場原因"
         ])
+        df_history.to_csv(HISTORY_FILE, index=False, encoding="utf-8-sig")
 
     remaining_positions = []
     new_closed_trades = []
@@ -141,7 +142,6 @@ def run_tracker():
                 print(f"   [時間停損] {name} 持有滿 4 天未發動，平倉離場")
                 continue
 
-            # 若未出場，更新最新現值
             pos['curr_price'] = close
             pos['unrealized_pct'] = round((close - entry_p) / entry_p * 100, 2)
             remaining_positions.append(pos)
@@ -162,7 +162,7 @@ def run_tracker():
             
             cand_ticker = cand['ticker']
             cand_name = cand['name']
-            buy_price = cand['close']  # 以收盤價/次日開盤進場基準
+            buy_price = cand['close']
             
             total_shares = int(SLOT_BUDGET / (buy_price * (1 + FEE_RATE)))
             if total_shares < 100: continue
