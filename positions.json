@@ -8,12 +8,12 @@
     "total_invested": 199942.05728624997,
     "shares_a": 1558,
     "shares_b": 1559,
-    "days_held": 0,
+    "days_held": 1,
     "is_breakeven": false,
     "lot_a_sold": false,
     "lot_a_revenue": 0.0,
     "lot_a_pnl_pct": 0.0,
-    "curr_price": 64.1,
-    "unrealized_pct": 0.0
+    "curr_price": 64.0999984741211,
+    "unrealized_pct": -0.0
   }
 ]
