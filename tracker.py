@@ -14,17 +14,13 @@ SLOT_BUDGET = 200000.0  # 每個槽位 20 萬元
 MAX_SLOTS = 3
 
 def load_json(filepath, default):
-    if not os.path.exists(filepath):
-        return default
+    if not os.path.exists(filepath): return default
     try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return default
+        with open(filepath, "r", encoding="utf-8") as f: return json.load(f)
+    except Exception: return default
 
 def save_json(filepath, data):
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    with open(filepath, "w", encoding="utf-8") as f: json.dump(data, f, ensure_ascii=False, indent=2)
 
 def run_tracker():
     today_str = datetime.date.today().strftime("%Y-%m-%d")
@@ -33,14 +29,13 @@ def run_tracker():
     positions = load_json(POSITIONS_FILE, [])
     report = load_json(REPORT_FILE, {})
     
-    # 載入歷史結案紀錄（新增四組價位欄位）
     if os.path.exists(HISTORY_FILE):
         df_history = pd.read_csv(HISTORY_FILE)
     else:
         df_history = pd.DataFrame(columns=[
-            "代號", "名稱", "進場日", "進場價", "停損價", "保本啟動價", "階段一停利價",
-            "出場日", "持股天數", "投入金額", "回收金額", "淨損益(NTD)",
-            "部位A_損益%", "部位B_損益%", "綜合報酬率%", "出場原因"
+            "代號", "名稱", "進場日", "進場價", "出場日", "持股天數",
+            "投入金額", "回收金額", "淨損益(NTD)", "部位A_損益%", "部位B_損益%",
+            "綜合報酬率%", "出場原因"
         ])
         df_history.to_csv(HISTORY_FILE, index=False, encoding="utf-8-sig")
 
@@ -52,7 +47,7 @@ def run_tracker():
         ticker = pos['ticker']
         code = pos['code']
         name = pos['name']
-        entry_p = pos['entry_price']
+        entry_p = float(pos['entry_price'])
         
         try:
             df = yf.download(ticker, period="1mo", interval="1d", progress=False)
@@ -73,18 +68,17 @@ def run_tracker():
             d = pos['days_held']
 
             # (1) 停損檢驗 (動態保本線 或 -4% 硬停損)
-            effective_stop = (entry_p * 1.002) if (pos['is_breakeven'] and d > 1) else pos['stop_loss_p']
+            effective_stop = (entry_p * 1.002) if (pos.get('is_breakeven') and d > 1) else (entry_p * 0.96)
             if low <= effective_stop:
                 exit_p = min(float(latest['Open']), effective_stop)
                 shares_left = pos['shares_a'] + pos['shares_b']
                 rev = shares_left * exit_p * (1 - FEE_RATE - TAX_RATE)
                 pnl_amt = rev - (shares_left * entry_p * (1 + FEE_RATE))
                 pnl_pct = (exit_p - entry_p) / entry_p * 100
-                reason = "🛡️ 動態保本出場 (+0.2%)" if (pos['is_breakeven'] and d > 1) else "🛑 硬停損 (-4%)"
+                reason = "🛡️ 動態保本出場 (+0.2%)" if (pos.get('is_breakeven') and d > 1) else "🛑 硬停損 (-4%)"
 
                 new_closed_trades.append({
                     "代號": code, "名稱": name, "進場日": pos['entry_date'], "進場價": entry_p,
-                    "停損價": pos['stop_loss_p'], "保本啟動價": pos['be_target_p'], "階段一停利價": pos['tp_stage1_p'],
                     "出場日": today_str, "持股天數": d, "投入金額": int(pos['total_invested']),
                     "回收金額": int(rev), "淨損益(NTD)": int(pnl_amt), "部位A_損益%": round(pnl_pct, 2),
                     "部位B_損益%": round(pnl_pct, 2), "綜合報酬率%": round(pnl_pct, 2), "出場原因": reason
@@ -93,22 +87,22 @@ def run_tracker():
                 continue
 
             # (2) 標記動態保本 (+4%)
-            if not pos['is_breakeven'] and high >= pos['be_target_p']:
+            if not pos.get('is_breakeven') and high >= entry_p * 1.04:
                 pos['is_breakeven'] = True
-                print(f"   [保本激活] {name} 盤中觸及 +4% (${pos['be_target_p']})，次日起停損調升至成本線")
+                print(f"   [保本激活] {name} 盤中觸及 +4%，次日起停損調升至成本線")
 
             # (3) 階段一停利 (+8% 出脫 50% 部位)
-            if not pos['lot_a_sold'] and high >= pos['tp_stage1_p']:
-                exit_p = max(float(latest['Open']), pos['tp_stage1_p'])
+            if not pos.get('lot_a_sold') and high >= entry_p * 1.08:
+                exit_p = max(float(latest['Open']), entry_p * 1.08)
                 rev_a = pos['shares_a'] * exit_p * (1 - FEE_RATE - TAX_RATE)
                 pos['lot_a_sold'] = True
                 pos['lot_a_revenue'] = rev_a
                 pos['lot_a_pnl_pct'] = (exit_p - entry_p) / entry_p * 100
                 pos['is_breakeven'] = True
-                print(f"   [階段一達成] {name} 半倉達成 +8% (${pos['tp_stage1_p']}) 停利！")
+                print(f"   [階段一達成] {name} 半倉達成 +8% 停利！")
 
             # (4) 階段二移動停利 (部位 B 破 10MA)
-            if pos['lot_a_sold'] and close < ma10:
+            if pos.get('lot_a_sold') and close < ma10:
                 exit_p = close
                 rev_b = pos['shares_b'] * exit_p * (1 - FEE_RATE - TAX_RATE)
                 tot_rev = pos['lot_a_revenue'] + rev_b
@@ -118,7 +112,6 @@ def run_tracker():
 
                 new_closed_trades.append({
                     "代號": code, "名稱": name, "進場日": pos['entry_date'], "進場價": entry_p,
-                    "停損價": pos['stop_loss_p'], "保本啟動價": pos['be_target_p'], "階段一停利價": pos['tp_stage1_p'],
                     "出場日": today_str, "持股天數": d, "投入金額": int(pos['total_invested']),
                     "回收金額": int(tot_rev), "淨損益(NTD)": int(pnl_amt),
                     "部位A_損益%": round(pos['lot_a_pnl_pct'], 2), "部位B_損益%": round(pnl_b_pct, 2),
@@ -128,7 +121,7 @@ def run_tracker():
                 continue
 
             # (5) 時間停損 (4天無動能)
-            if d >= 4 and not pos['lot_a_sold'] and close <= entry_p * 1.03:
+            if d >= 4 and not pos.get('lot_a_sold') and close <= entry_p * 1.03:
                 exit_p = close
                 shares_left = pos['shares_a'] + pos['shares_b']
                 rev = shares_left * exit_p * (1 - FEE_RATE - TAX_RATE)
@@ -137,7 +130,6 @@ def run_tracker():
 
                 new_closed_trades.append({
                     "代號": code, "名稱": name, "進場日": pos['entry_date'], "進場價": entry_p,
-                    "停損價": pos['stop_loss_p'], "保本啟動價": pos['be_target_p'], "階段一停利價": pos['tp_stage1_p'],
                     "出場日": today_str, "持股天數": d, "投入金額": int(pos['total_invested']),
                     "回收金額": int(rev), "淨損益(NTD)": int(pnl_amt), "部位A_損益%": round(pnl_pct, 2),
                     "部位B_損益%": round(pnl_pct, 2), "綜合報酬率%": round(pnl_pct, 2), "出場原因": "⏳ 時間停損 (4天無動能)"
@@ -145,8 +137,12 @@ def run_tracker():
                 print(f"   [時間停損] {name} 持有滿 4 天未發動，平倉離場")
                 continue
 
-            pos['curr_price'] = close
+            # 💡 記錄最新即時關鍵價位
+            pos['curr_price'] = round(close, 1)
             pos['unrealized_pct'] = round((close - entry_p) / entry_p * 100, 2)
+            pos['ma10'] = round(ma10, 1)
+            pos['curr_stop'] = round(effective_stop, 1)
+            pos['tp_stage1'] = round(entry_p * 1.08, 1)
             remaining_positions.append(pos)
 
         except Exception as e:
@@ -167,11 +163,6 @@ def run_tracker():
             cand_name = cand['name']
             buy_price = float(cand['close'])
             
-            # 精算四組重要價位
-            stop_loss_p = round(buy_price * 0.96, 1)
-            be_target_p = round(buy_price * 1.04, 1)
-            tp_stage1_p = round(buy_price * 1.08, 1)
-            
             total_shares = int(SLOT_BUDGET / (buy_price * (1 + FEE_RATE)))
             if total_shares < 100: continue
             
@@ -181,19 +172,17 @@ def run_tracker():
             
             remaining_positions.append({
                 "code": cand_code, "name": cand_name, "ticker": cand_ticker,
-                "entry_date": today_str,
-                "entry_price": buy_price,
-                "stop_loss_p": stop_loss_p,       # 🛑 硬停損價 (-4%)
-                "be_target_p": be_target_p,       # 🛡️ 保本啟動點 (+4%)
-                "tp_stage1_p": tp_stage1_p,       # 🎯 階段一停利 (+8%)
+                "entry_date": today_str, "entry_price": buy_price,
                 "total_invested": cost, "shares_a": shares_a, "shares_b": shares_b,
                 "days_held": 0, "is_breakeven": False, "lot_a_sold": False,
                 "lot_a_revenue": 0.0, "lot_a_pnl_pct": 0.0,
-                "curr_price": buy_price, "unrealized_pct": 0.0
+                "curr_price": buy_price, "unrealized_pct": 0.0,
+                "curr_stop": round(buy_price * 0.96, 1),
+                "tp_stage1": round(buy_price * 1.08, 1),
+                "ma10": round(buy_price * 0.99, 1)
             })
-            print(f"   [新開倉] 建立實盤虛擬持倉：{cand_name}，買入價 ${buy_price}，停損 ${stop_loss_p}，保本點 ${be_target_p}，停利 ${tp_stage1_p}")
+            print(f"   [新開倉] 建立實盤虛擬持倉：{cand_name} ({cand_code})，買入價 ${buy_price}")
 
-    # ================= 3. 儲存帳本檔案 =================
     save_json(POSITIONS_FILE, remaining_positions)
     
     if new_closed_trades:
