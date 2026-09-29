@@ -84,36 +84,98 @@ def get_twii_market_status():
     except Exception: pass
     return True, 0, 0
 
-# 官方企業輪廓資料庫快取（自動對應類股與資本額）
+# 💡【核心功能】：整合全台股上市 (TWSE) 與上櫃 (TPEx) 官方主資料庫
 @st.cache_data(ttl=86400)
-def get_company_profiles():
-    known_profiles = {
-        "2330": {"industry": "半導體業", "cap": 2593.2},
-        "2454": {"industry": "半導體業", "cap": 160.2},
-        "3037": {"industry": "電子零組件業", "cap": 153.0},
-        "3017": {"industry": "電腦及週邊設備業", "cap": 38.8},
-        "3324": {"industry": "電腦及週邊設備業", "cap": 8.8},
-        "6274": {"industry": "電子零組件業", "cap": 27.2},
-        "2345": {"industry": "通信網路業", "cap": 56.4},
-        "2368": {"industry": "電子零組件業", "cap": 49.3},
-        "4915": {"industry": "電腦及週邊設備業", "cap": 45.6}
+def get_all_taiwan_stocks():
+    stocks = {
+        # 內建常見上櫃/上市科技熱門股備援
+        "5309": {"code": "5309", "name": "系統電", "market": ".TWO", "market_name": "上櫃", "industry": "電腦及週邊設備業", "cap": 19.5},
+        "3324": {"code": "3324", "name": "雙鴻", "market": ".TWO", "market_name": "上櫃", "industry": "電腦及週邊設備業", "cap": 8.8},
+        "6274": {"code": "6274", "name": "台燿", "market": ".TWO", "market_name": "上櫃", "industry": "電子零組件業", "cap": 27.2},
+        "8069": {"code": "8069", "name": "元太", "market": ".TWO", "market_name": "上櫃", "industry": "光電業", "cap": 114.5},
+        "2330": {"code": "2330", "name": "台積電", "market": ".TW", "market_name": "上市", "industry": "半導體業", "cap": 2593.2},
+        "2454": {"code": "2454", "name": "聯發科", "market": ".TW", "market_name": "上市", "industry": "半導體業", "cap": 160.2},
+        "3037": {"code": "3037", "name": "欣興", "market": ".TW", "market_name": "上市", "industry": "電子零組件業", "cap": 153.0},
+        "3017": {"code": "3017", "name": "奇鋐", "market": ".TW", "market_name": "上市", "industry": "電腦及週邊設備業", "cap": 38.8},
+        "2345": {"code": "2345", "name": "智邦", "market": ".TW", "market_name": "上市", "industry": "通信網路業", "cap": 56.4},
+        "2368": {"code": "2368", "name": "金像電", "market": ".TW", "market_name": "上市", "industry": "電子零組件業", "cap": 49.3},
+        "4915": {"code": "4915", "name": "致伸", "market": ".TW", "market_name": "上市", "industry": "電腦及週邊設備業", "cap": 45.6}
     }
+    
+    # 1. 抓取證交所 (TWSE) 上市公司資料
     try:
         url_l = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
-        res = requests.get(url_l, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
-        if res.status_code == 200:
-            for item in res.json():
-                code = item.get("公司代號", "").strip()
-                ind = item.get("產業別", "")
+        res_l = requests.get(url_l, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
+        if res_l.status_code == 200:
+            for item in res_l.json():
+                c = item.get("公司代號", "").strip()
+                n = item.get("公司簡稱", "").strip() or item.get("公司名稱", "").strip()
+                ind = item.get("產業別", "上市企業")
                 cap_s = float(item.get("實收資本額", 0)) / 100_000_000
-                if code:
-                    known_profiles[code] = {
-                        "industry": ind if ind else "上市企業",
-                        "cap": round(cap_s, 1)
-                    }
+                if c and n:
+                    stocks[c] = {"code": c, "name": n, "market": ".TW", "market_name": "上市", "industry": ind if ind else "上市企業", "cap": round(cap_s, 1)}
     except Exception:
         pass
-    return known_profiles
+
+    # 2. 抓取櫃買中心 (TPEx) 上櫃公司資料（例如：系統電 5309）
+    try:
+        url_o = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"
+        res_o = requests.get(url_o, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
+        if res_o.status_code == 200:
+            for item in res_o.json():
+                c = str(item.get("SecuritiesCompanyCode", "")).strip() or str(item.get("公司代號", "")).strip()
+                n = str(item.get("CompanyBriefName", "")).strip() or str(item.get("公司簡稱", "")).strip()
+                ind = str(item.get("SectorName", "上櫃企業")).strip() or str(item.get("產業別", "上櫃企業")).strip()
+                cap_raw = float(item.get("PaidInCapital", 0) or item.get("實收資本額", 0))
+                cap_s = cap_raw / 100_000_000
+                if c and n:
+                    stocks[c] = {"code": c, "name": n, "market": ".TWO", "market_name": "上櫃", "industry": ind if ind else "上櫃企業", "cap": round(cap_s, 1)}
+    except Exception:
+        pass
+
+    return stocks
+
+# 💡【核心功能】：智慧解析使用者輸入（代碼或名稱擇一皆可）
+def resolve_taiwan_stock(query):
+    q = query.strip()
+    if not q:
+        return None, "請輸入欲搜尋的股票名稱或代號！"
+    
+    universe = get_all_taiwan_stocks()
+    
+    # 1. 以純代號精準比對 (例如輸入：5309 或 2330)
+    if q in universe:
+        return universe[q], None
+        
+    # 2. 以名稱完全比對 (例如輸入：系統電 或 台積電)
+    for c, s in universe.items():
+        if s['name'] == q:
+            return s, None
+            
+    # 3. 名稱包含或代號包含模糊比對
+    candidates = [s for s in universe.values() if (q in s['name']) or (q == s['code'])]
+    if len(candidates) == 1:
+        return candidates[0], None
+    elif len(candidates) > 1:
+        cand_str = "、".join([f"{c['name']} ({c['code']})" for c in candidates[:4]])
+        return None, f"找到多檔符合標的：{cand_str}，請輸入更精確的名稱或 4 碼代號！"
+        
+    # 4. 針對特殊 ETF 或未及時同步之代號，透過 yfinance 實測探測
+    if q.isdigit() or (len(q) >= 4 and q[:4].isdigit()):
+        for sfx, m_name in [(".TW", "上市"), (".TWO", "上櫃")]:
+            try:
+                t = yf.Ticker(f"{q}{sfx}")
+                h = t.history(period="5d")
+                if not h.empty:
+                    s_name = t.info.get("shortName") or q
+                    return {
+                        "code": q, "name": s_name, "market": sfx,
+                        "market_name": m_name, "industry": "上市櫃企業", "cap": 0.0
+                    }, None
+            except Exception:
+                pass
+
+    return None, f"查無台股標的「{q}」，請確認名稱是否正確（例如輸入：系統電 或 5309）！"
 
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = load_json(WATCHLIST_FILE, DEFAULT_STOCKS)
@@ -134,19 +196,18 @@ with st.sidebar:
         vol_mode = st.radio("成交量萎縮標準", ["嚴格（低於 5MV 且 20MV）", "標準（低於 5MV 或 20MV）"], index=0)
 
     st.header("📋 觀察名單管理")
-    with st.expander("➕ 新增自選股票", expanded=False):
-        new_name = st.text_input("股票名稱", key="sb_new_name")
-        new_code = st.text_input("4 碼代號", key="sb_new_code")
-        new_market = st.selectbox("市場類別", ["上市 (.TW)", "上櫃 (.TWO)"], index=0, key="sb_new_mkt")
+    with st.expander("➕ 新增自選股票 (智慧辨識)", expanded=False):
+        sb_query = st.text_input("輸入名稱或代號", placeholder="例如：系統電 或 5309", key="sb_smart_in")
         if st.button("確認加入清單", type="primary", use_container_width=True, key="sb_btn_add"):
-            clean_code, clean_name = new_code.strip(), new_name.strip()
-            if clean_code and clean_name:
-                suffix = ".TW" if "上市" in new_market else ".TWO"
-                label = f"{clean_name} ({clean_code})"
-                st.session_state.watchlist[label] = f"{clean_code}{suffix}"
+            stock_info, err = resolve_taiwan_stock(sb_query)
+            if stock_info:
+                label = f"{stock_info['name']} ({stock_info['code']})"
+                st.session_state.watchlist[label] = f"{stock_info['code']}{stock_info['market']}"
                 save_json(WATCHLIST_FILE, st.session_state.watchlist)
-                st.success(f"已新增：{label}")
+                st.success(f"✅ 成功加入：{label} ({stock_info['market_name']})")
                 st.rerun()
+            else:
+                st.error(err)
 
     with st.expander("🗑️ 刪除自選股票", expanded=False):
         if st.session_state.watchlist:
@@ -507,29 +568,28 @@ with tab_single:
                 fig.update_layout(xaxis_rangeslider_visible=False, height=420, margin=dict(l=10, r=10, t=10, b=10))
                 st.plotly_chart(fig, use_container_width=True)
 
-# ================= TAB 5: 自選股票清單總覽 (內建新增/剔除股票功能) =================
+# ================= TAB 5: 自選股票清單總覽 (名稱或代號擇一智慧搜尋) =================
 with tab_watchlist:
     st.subheader("📋 自選股票清單總覽儀表板 (Watchlist Overview)")
     
-    # 💡 核心新增：在 TAB 5 頂部直接提供「新增 / 剔除」管理面板
+    # 💡 升級：名稱或代號擇一智慧搜尋輸入
     with st.expander("⚙️ 快速管理自選名單 (在此新增 / 剔除標的)", expanded=False):
         c_add, c_del = st.columns(2)
         
-        # 1. 快速新增
+        # 1. 智慧新增
         with c_add:
-            st.markdown("##### ➕ 新增標的至自選清單")
-            t5_name = st.text_input("股票名稱", key="t5_in_name", placeholder="例如：技嘉")
-            t5_code = st.text_input("4 碼代號", key="t5_in_code", placeholder="例如：2376")
-            t5_mkt = st.selectbox("市場別", ["上市 (.TW)", "上櫃 (.TWO)"], key="t5_in_mkt")
+            st.markdown("##### ➕ 新增標的至自選清單 (智慧二合一)")
+            t5_smart_query = st.text_input("輸入股票名稱 或 4 碼代號", placeholder="例如：系統電 或 5309 或 鴻海", key="t5_smart_query")
             if st.button("確認加入自選名單", key="t5_btn_add", type="primary", use_container_width=True):
-                clean_c, clean_n = t5_code.strip(), t5_name.strip()
-                if clean_c and clean_n:
-                    sfx = ".TW" if "上市" in t5_mkt else ".TWO"
-                    lbl = f"{clean_n} ({clean_c})"
-                    st.session_state.watchlist[lbl] = f"{clean_c}{sfx}"
+                stock_info, err = resolve_taiwan_stock(t5_smart_query)
+                if stock_info:
+                    lbl = f"{stock_info['name']} ({stock_info['code']})"
+                    st.session_state.watchlist[lbl] = f"{stock_info['code']}{stock_info['market']}"
                     save_json(WATCHLIST_FILE, st.session_state.watchlist)
-                    st.success(f"已成功新增：{lbl}！")
+                    st.success(f"✅ 成功找到並加入：{lbl} ({stock_info['market_name']})！")
                     st.rerun()
+                else:
+                    st.error(err)
 
         # 2. 快速剔除
         with c_del:
@@ -544,7 +604,7 @@ with tab_watchlist:
             else:
                 st.info("目前自選清單中無任何標的。")
 
-    profiles = get_company_profiles()
+    profiles = get_all_taiwan_stocks()
     watchlist_items = list(st.session_state.watchlist.items())
     
     if not watchlist_items:
@@ -564,7 +624,8 @@ with tab_watchlist:
                 code = ticker.replace(".TW", "").replace(".TWO", "").strip()
                 name = label.split(" (")[0]
                 
-                p_info = profiles.get(code, {"industry": "電子科技", "cap": 0.0})
+                # 自動對應上市/上櫃官方產業與資本額
+                p_info = profiles.get(code, {"industry": "上市櫃企業", "cap": 0.0})
                 ind = p_info["industry"]
                 cap_val = p_info["cap"]
                 
@@ -687,8 +748,8 @@ with tab_docs:
         st.write("• **條件 4【K 棒實體收斂】**：當日 K 棒實體振幅 <= 3.5%，禁止長黑實體。")
 
     with st.expander("🏹 三、 盤中「右側確認」掛單進場 SOP", expanded=True):
-        st.write("• **大盤多頭濾網**：加權指數收盤必須站穩 20MA（月線）之上。若大盤處於月線反壓，全市場雷達強制休眠。")
-        st.write("• **次日右側過高確認**：訊號成立次日，盤中最高價突破深蹲日最高點才准掛單進場；未突破則一律放棄建倉。")
+        st.write("• **大盤多頭濾網】**：加權指數收盤必須站穩 20MA（月線）之上。若大盤處於月線反壓，全市場雷達強制休眠。")
+        st.write("• **次日右側過高確認】**：訊號成立次日，盤中最高價突破深蹲日最高點才准掛單進場；未突破則一律放棄建倉。")
 
     with st.expander("🛑 四、 嚴格五大出場紀律 SOP", expanded=True):
         st.write("• **🛑 防線 1【硬停損線 (-4.0%)】**：跌破成本價之 -4.0%，無條件市價全數砍單。")
