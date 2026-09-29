@@ -84,7 +84,7 @@ def get_twii_market_status():
     except Exception: pass
     return True, 0, 0
 
-# 💡 官方企業輪廓資料庫快取（自動對應類股與資本額）
+# 官方企業輪廓資料庫快取（自動對應類股與資本額）
 @st.cache_data(ttl=86400)
 def get_company_profiles():
     known_profiles = {
@@ -170,7 +170,6 @@ if is_bull:
 else:
     st.warning(f"🟡 **大盤月線反壓中**（加權指數：{twii_c:,.0f} 點 低於月線 {twii_ma:,.0f} 點），建議空手或將部位打折！")
 
-# 頁面六大分頁標籤（含全新 TAB 5）
 tab_radar, tab_tracker, tab_batch, tab_single, tab_watchlist, tab_docs = st.tabs([
     "📡 今日雷達獵股戰報",
     "📊 實盤追蹤與績效帳本 (方案B)",
@@ -180,7 +179,7 @@ tab_radar, tab_tracker, tab_batch, tab_single, tab_watchlist, tab_docs = st.tabs
     "📖 策略手冊與 SOP 指南"
 ])
 
-# ================= TAB 0: 每日雷達戰報 (含類股、規模與新聞) =================
+# ================= TAB 0: 每日雷達戰報 (安全修復新聞連結) =================
 with tab_radar:
     st.subheader("📡 全自動獵股雷達・今日盤後戰報")
     report = load_json(REPORT_FILE, {})
@@ -200,9 +199,12 @@ with tab_radar:
         elif squat_stocks:
             st.success(f"🎯 **【今日焦點】：共發現 {len(squat_stocks)} 檔精準符合「量縮深蹲」進場門檻！**")
             for s in squat_stocks:
+                s_name = s.get('name', '')
+                s_code = s.get('code', '')
+                
                 with st.container():
                     c1, c2, c3, c4 = st.columns([2.2, 1.8, 2.0, 2.0])
-                    c1.markdown(f"### **{s['name']} ({s['code']})**")
+                    c1.markdown(f"### **{s_name} ({s_code})**")
                     c1.caption(f"最新收盤：${s['close']} ｜ 踩中：**{s['support']}**")
                     c1.write(f"🏷️ **類股**：`{s.get('industry', '電子科技')}`")
                     c1.write(f"🏢 **規模**：`{s.get('cap_bracket', str(s.get('cap', '')) + '億')}`")
@@ -214,9 +216,9 @@ with tab_radar:
                     c3.write(f"• **硬停損**：`${s['stop_loss']}`")
                     c3.write(f"• **目標價 (+8%)**：`${s['take_profit']}`")
                     
-                    label_key = f"{s['name']} ({s['code']})"
+                    label_key = f"{s_name} ({s_code})"
                     if label_key not in st.session_state.watchlist:
-                        if c4.button(f"📥 加到自選名單", key=f"radar_add_{s['code']}"):
+                        if c4.button(f"📥 加到自選名單", key=f"radar_add_{s_code}"):
                             st.session_state.watchlist[label_key] = s['ticker']
                             save_json(WATCHLIST_FILE, st.session_state.watchlist)
                             st.success(f"已將 {label_key} 加入觀察清單！")
@@ -224,12 +226,16 @@ with tab_radar:
                     else:
                         c4.write("✅ 已在自選觀察清單中")
                         
-                    # 💡 近半個月新聞與產業速查
-                    with st.expander(f"📰 查看 {s['name']} 近半個月新聞與產業速查", expanded=False):
+                    # 💡 安全構造外部連結，徹底消除語法衝突
+                    yahoo_url = s.get('yahoo_news') or f"https://tw.stock.yahoo.com/quote/{s_code}/news"
+                    google_url = s.get('google_news') or f"https://www.google.com/search?q={s_name}+{s_code}+股票&tbm=nws&tbs=qdr:m"
+                    cnyes_url = s.get('cnyes_news') or f"https://invest.cnyes.com/twstock/TWS/{s_code}/news"
+
+                    with st.expander(f"📰 查看 {s_name} 近半個月新聞與產業速查", expanded=False):
                         n1, n2, n3 = st.columns(3)
-                        n1.markdown(f"[📰 Yahoo 奇摩個股新聞]({s.get('yahoo_news', f'https://tw.stock.yahoo.com/quote/{s[\"code\"]}/news')})")
-                        n2.markdown(f"[🔍 Google 財經近半月新聞]({s.get('google_news', f'https://www.google.com/search?q={s[\"name\"]}+{s[\"code\"]}+股票&tbm=nws&tbs=qdr:m')})")
-                        n3.markdown(f"[📊 鉅亨網法人與重大訊息]({s.get('cnyes_news', f'https://invest.cnyes.com/twstock/TWS/{s[\"code\"]}/news')})")
+                        n1.markdown(f"[📰 Yahoo 奇摩個股新聞]({yahoo_url})")
+                        n2.markdown(f"[🔍 Google 財經近半月新聞]({google_url})")
+                        n3.markdown(f"[📊 鉅亨網法人與重大訊息]({cnyes_url})")
                 st.divider()
         else:
             st.info("⏸ 今日籌碼與基本面強勢股尚未剛好踩在均線深蹲點，建議維持觀望。")
@@ -502,7 +508,7 @@ with tab_single:
                 fig.update_layout(xaxis_rangeslider_visible=False, height=420, margin=dict(l=10, r=10, t=10, b=10))
                 st.plotly_chart(fig, use_container_width=True)
 
-# ================= TAB 5: 自選股票清單總覽 (全新功能) =================
+# ================= TAB 5: 自選股票清單總覽 =================
 with tab_watchlist:
     st.subheader("📋 自選股票清單總覽儀表板 (Watchlist Overview)")
     
@@ -526,7 +532,6 @@ with tab_watchlist:
                 code = ticker.replace(".TW", "").replace(".TWO", "").strip()
                 name = label.split(" (")[0]
                 
-                # 類股與股本資料
                 p_info = profiles.get(code, {"industry": "電子科技", "cap": 0.0})
                 ind = p_info["industry"]
                 cap_val = p_info["cap"]
@@ -542,7 +547,6 @@ with tab_watchlist:
                 else:
                     cap_bracket_label = f"{cap_val:.1f}億 (大型權值股)"
 
-                # 行情運算
                 sub_df = None
                 try:
                     if not df_all.empty:
@@ -563,7 +567,6 @@ with tab_watchlist:
                     vol = float(sub_df['Volume'].iloc[-1])
                     vol_ma5 = float(sub_df['Volume'].rolling(5).mean().iloc[-1])
                     
-                    # 20MA 多空位階
                     dist_ma20 = ((c_today - ma20) / ma20) * 100
                     if c_today >= ma20:
                         mkt_pos = f"🟢 站上 (+{dist_ma20:.1f}%)"
@@ -571,7 +574,6 @@ with tab_watchlist:
                     else:
                         mkt_pos = f"🔴 跌破 ({dist_ma20:.1f}%)"
                         
-                    # 量能萎縮比
                     vol_ratio = vol / vol_ma5 if vol_ma5 > 0 else 1.0
                     if vol_ratio <= 0.7:
                         vol_tag = f"🧊 量縮 ({vol_ratio:.2f}x)"
@@ -580,7 +582,6 @@ with tab_watchlist:
                     else:
                         vol_tag = f"⚪ 常態 ({vol_ratio:.2f}x)"
 
-                    # 深蹲狀態
                     low = float(sub_df['Low'].iloc[-1])
                     if (low <= ma10 * 1.018 and c_today >= ma10 * 0.99) and vol < vol_ma5:
                         squat_tag = "🎯 均線量縮深蹲"
@@ -607,7 +608,6 @@ with tab_watchlist:
                     "name": name
                 })
 
-        # 頂部戰情指標卡
         c_ov1, c_ov2, c_ov3 = st.columns(3)
         c_ov1.metric("自選監控總數", f"{len(overview_rows)} 檔")
         bull_pct = (bull_count / len(overview_rows) * 100) if overview_rows else 0
@@ -616,12 +616,9 @@ with tab_watchlist:
         c_ov3.metric("🎯 處於量縮深蹲點", f"{squat_ready_count} 檔")
 
         st.write("---")
-        
-        # 1. 核心儀表板總覽表格
         df_display = pd.DataFrame(overview_rows).drop(columns=['code', 'name'])
         st.dataframe(df_display, use_container_width=True, hide_index=True)
         
-        # 2. 近半個月新聞與個股快速檢索
         st.write("---")
         st.markdown("#### 📰 【自選股近半個月即時新聞與研究傳送門】")
         sel_stock = st.selectbox("選擇要查閱近半個月新聞的標的：", options=[r["標的代號"] for r in overview_rows])
@@ -641,7 +638,7 @@ with tab_watchlist:
             nc3.markdown(f"**[📊 鉅亨網法人動態與營收走勢]**(https://invest.cnyes.com/twstock/TWS/{c_code}/news)")
             nc3.caption("三大法人買賣超與業績解析")
 
-# ================= TAB 4: 策略手冊與 SOP 指南 (原生卡片架構，絕不溢出) =================
+# ================= TAB 4: 策略手冊與 SOP 指南 (原生卡片架構) =================
 with tab_docs:
     st.subheader("📖 短線成長股・量縮深蹲 (Squat & Rebound) 全流程作戰手冊 V2.0")
     st.info("💡 本系統專為「不盯盤、每日 16:30 離線決策、次日開盤智慧單自動執行」設計，具備標準作業程序（SOP）。")
