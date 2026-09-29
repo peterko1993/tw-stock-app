@@ -5,6 +5,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import json
 import os
+import base64
+import requests
 
 st.set_page_config(page_title="短線成長股決策助手 V2.0", page_icon="📈", layout="wide")
 
@@ -27,24 +29,44 @@ def load_json(filepath, default):
     except Exception: return default
 
 def save_json(filepath, data):
-    with open(filepath, "w", encoding="utf-8") as f: json.dump(data, f, ensure_ascii=False, indent=2)
-
-@st.cache_data(ttl=1800)
-def get_twii_market_status():
-    try:
-        twii = yf.download("^TWII", period="3mo", interval="1d", progress=False)
-        if not twii.empty:
-            if isinstance(twii.columns, pd.MultiIndex): twii.columns = twii.columns.get_level_values(0)
-            twii['MA20'] = twii['Close'].rolling(20).mean()
-            latest = twii.iloc[-1]
-            close_p, ma20_p, open_p = float(latest['Close']), float(latest['MA20']), float(latest['Open'])
-            is_bull = (close_p >= ma20_p) or (close_p > open_p * 1.008)
-            return is_bull, close_p, ma20_p
-    except Exception: pass
-    return True, 0, 0
-
-if "watchlist" not in st.session_state:
-    st.session_state.watchlist = load_json(WATCHLIST_FILE, DEFAULT_STOCKS)
+    # 1. 先儲存至容器本地檔案
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        
+    # 2. 💡 反向同步回寫至 GitHub 儲存庫 (永久保存)
+    if "GITHUB_TOKEN" in st.secrets and "GITHUB_REPO" in st.secrets:
+        try:
+            token = st.secrets["GITHUB_TOKEN"]
+            repo = st.secrets["GITHUB_REPO"]
+            url = f"https://api.github.com/repos/{repo}/contents/{filepath}"
+            headers = {
+                "Authorization": f"token {token}",
+                "Accept": "application/vnd.github.v3+json"
+            }
+            
+            # 先取得該檔案目前的 SHA (Git 更新檔案必須帶有原 SHA)
+            get_res = requests.get(url, headers=headers)
+            sha = get_res.json().get("sha") if get_res.status_code == 200 else None
+            
+            # 將 JSON 轉為 Base64 編碼
+            json_str = json.dumps(data, ensure_ascii=False, indent=2)
+            content_b64 = base64.b64encode(json_str.encode("utf-8")).decode("utf-8")
+            
+            payload = {
+                "message": f"🤖 [Streamlit] 使用者反向更新 {filepath}",
+                "content": content_b64
+            }
+            if sha:
+                payload["sha"] = sha
+                
+            # 發送 PUT 請求完成 Git Commit
+            put_res = requests.put(url, headers=headers, json=payload)
+            if put_res.status_code in [200, 201]:
+                print(f"✅ 成功反向更新 {filepath} 至 GitHub！")
+            else:
+                print(f"⚠️ 反向更新失敗: {put_res.text}")
+        except Exception as e:
+            print(f"⚠️ 反向更新例外異常: {e}")
 
 # ================= 側邊欄設定 =================
 with st.sidebar:
