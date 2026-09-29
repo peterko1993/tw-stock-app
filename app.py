@@ -15,6 +15,7 @@ REPORT_FILE = "radar_report.json"
 POSITIONS_FILE = "positions.json"
 HISTORY_FILE = "trade_history.csv"
 
+# 經典預設自選股池
 DEFAULT_STOCKS = {
     "台積電 (2330)": "2330.TW", "聯發科 (2454)": "2454.TW",
     "欣興 (3037)": "3037.TW", "奇鋐 (3017)": "3017.TW",
@@ -33,8 +34,16 @@ def save_json(filepath, data):
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
         
-    # 2. 💡 反向同步回寫至 GitHub 儲存庫 (永久保存)
-    if "GITHUB_TOKEN" in st.secrets and "GITHUB_REPO" in st.secrets:
+    # 2. 💡 安全檢查是否具備 GitHub Secrets 設定
+    has_secrets = False
+    try:
+        if "GITHUB_TOKEN" in st.secrets and "GITHUB_REPO" in st.secrets:
+            has_secrets = True
+    except Exception:
+        has_secrets = False
+
+    # 3. 💡 反向同步回寫至 GitHub 儲存庫 (永久保存)
+    if has_secrets:
         try:
             token = st.secrets["GITHUB_TOKEN"]
             repo = st.secrets["GITHUB_REPO"]
@@ -59,14 +68,30 @@ def save_json(filepath, data):
             if sha:
                 payload["sha"] = sha
                 
-            # 發送 PUT 請求完成 Git Commit
             put_res = requests.put(url, headers=headers, json=payload)
             if put_res.status_code in [200, 201]:
                 print(f"✅ 成功反向更新 {filepath} 至 GitHub！")
-            else:
-                print(f"⚠️ 反向更新失敗: {put_res.text}")
         except Exception as e:
             print(f"⚠️ 反向更新例外異常: {e}")
+
+# 💡【核心修復 1】：大盤加權指數狀態函數
+@st.cache_data(ttl=1800)
+def get_twii_market_status():
+    try:
+        twii = yf.download("^TWII", period="3mo", interval="1d", progress=False)
+        if not twii.empty:
+            if isinstance(twii.columns, pd.MultiIndex): twii.columns = twii.columns.get_level_values(0)
+            twii['MA20'] = twii['Close'].rolling(20).mean()
+            latest = twii.iloc[-1]
+            close_p, ma20_p, open_p = float(latest['Close']), float(latest['MA20']), float(latest['Open'])
+            is_bull = (close_p >= ma20_p) or (close_p > open_p * 1.008)
+            return is_bull, close_p, ma20_p
+    except Exception: pass
+    return True, 0, 0
+
+# 💡【核心修復 2】：初始化自選名單（徹底消滅 line 102 的 KeyError）
+if "watchlist" not in st.session_state:
+    st.session_state.watchlist = load_json(WATCHLIST_FILE, DEFAULT_STOCKS)
 
 # ================= 側邊欄設定 =================
 with st.sidebar:
@@ -113,6 +138,7 @@ with st.sidebar:
         st.success("已還原預設自選清單！")
         st.rerun()
 
+# 頂部大盤環境狀態
 st.title("📈 短線成長股・量縮深蹲指示器 V2.0")
 is_bull, twii_c, twii_ma = get_twii_market_status()
 if is_bull:
@@ -153,7 +179,7 @@ with tab_radar:
                     c1.markdown(f"### **{s['name']} ({s['code']})**")
                     c1.caption(f"最新收盤：${s['close']} ｜ 支撐：{s['support']}")
                     c2.write(f"• 投信買超：`+{s['trust_buy']}` 張 ｜ 營收 YoY：`+{s['rev_yoy']}%`")
-                    c3.write(f"• 建議掛單區間：`${s['buy_min']} ~ ${s['buy_max']}` ｜ 停損：`${s['stop_loss']}`")
+                    c3.write(f"• 建議掛單區間：`\({s['buy_min']} ~\){s['buy_max']}` ｜ 停損：`${s['stop_loss']}`")
                     
                     label_key = f"{s['name']} ({s['code']})"
                     if label_key not in st.session_state.watchlist:
@@ -168,7 +194,7 @@ with tab_radar:
         else:
             st.info("⏸ 今日籌碼與基本面強勢股尚未剛好踩在均線深蹲點，建議維持觀望。")
 
-# ================= TAB 1: 實盤追蹤與績效帳本 (全新關鍵價位面板) =================
+# ================= TAB 1: 實盤追蹤與績效帳本 =================
 with tab_tracker:
     st.subheader("📊 方案 B：前向實盤追蹤流水帳本 (Forward-Walk Paper Trading)")
     
@@ -201,19 +227,16 @@ with tab_tracker:
             unreal_pct = float(p.get('unrealized_pct', 0.0))
             days = p.get('days_held', 0)
             
-            # 動態停損價位顯示
             if p.get('is_breakeven') and days > 1:
                 stop_display = f"🛡️ ${entry_p * 1.002:.1f} (保本線)"
             else:
                 stop_display = f"🛑 ${entry_p * 0.96:.1f} (-4%)"
                 
-            # 階段一停利價位顯示
             if p.get('lot_a_sold'):
                 tp1_display = "✅ 半倉已停利"
             else:
                 tp1_display = f"🎯 ${entry_p * 1.08:.1f} (+8%)"
                 
-            # 移動停利 10MA 顯示
             ma10_val = p.get('ma10')
             ma10_display = f"🏄 ${ma10_val:.1f}" if ma10_val else "計算中"
 
