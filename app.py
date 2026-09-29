@@ -7,6 +7,7 @@ import json
 import os
 import base64
 import requests
+import datetime
 
 st.set_page_config(page_title="短線成長股決策助手 V2.0", page_icon="📈", layout="wide")
 
@@ -15,12 +16,13 @@ REPORT_FILE = "radar_report.json"
 POSITIONS_FILE = "positions.json"
 HISTORY_FILE = "trade_history.csv"
 
-# 經典預設自選股池
+# 預設自選標的池（涵蓋 20~150 億旗艦股）
 DEFAULT_STOCKS = {
     "台積電 (2330)": "2330.TW", "聯發科 (2454)": "2454.TW",
     "欣興 (3037)": "3037.TW", "奇鋐 (3017)": "3017.TW",
     "雙鴻 (3324)": "3324.TWO", "台燿 (6274)": "6274.TWO",
-    "智邦 (2345)": "2345.TW", "金像電 (2368)": "2368.TW"
+    "智邦 (2345)": "2345.TW", "金像電 (2368)": "2368.TW",
+    "致伸 (4915)": "4915.TW"
 }
 
 def load_json(filepath, default):
@@ -30,11 +32,9 @@ def load_json(filepath, default):
     except Exception: return default
 
 def save_json(filepath, data):
-    # 1. 先儲存至容器本地檔案
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
         
-    # 2. 💡 安全檢查是否具備 GitHub Secrets 設定
     has_secrets = False
     try:
         if "GITHUB_TOKEN" in st.secrets and "GITHUB_REPO" in st.secrets:
@@ -42,7 +42,6 @@ def save_json(filepath, data):
     except Exception:
         has_secrets = False
 
-    # 3. 💡 反向同步回寫至 GitHub 儲存庫 (永久保存)
     if has_secrets:
         try:
             token = st.secrets["GITHUB_TOKEN"]
@@ -52,12 +51,9 @@ def save_json(filepath, data):
                 "Authorization": f"token {token}",
                 "Accept": "application/vnd.github.v3+json"
             }
-            
-            # 先取得該檔案目前的 SHA (Git 更新檔案必須帶有原 SHA)
             get_res = requests.get(url, headers=headers)
             sha = get_res.json().get("sha") if get_res.status_code == 200 else None
             
-            # 將 JSON 轉為 Base64 編碼
             json_str = json.dumps(data, ensure_ascii=False, indent=2)
             content_b64 = base64.b64encode(json_str.encode("utf-8")).decode("utf-8")
             
@@ -74,7 +70,6 @@ def save_json(filepath, data):
         except Exception as e:
             print(f"⚠️ 反向更新例外異常: {e}")
 
-# 💡【核心修復 1】：大盤加權指數狀態函數
 @st.cache_data(ttl=1800)
 def get_twii_market_status():
     try:
@@ -89,7 +84,6 @@ def get_twii_market_status():
     except Exception: pass
     return True, 0, 0
 
-# 💡【核心修復 2】：初始化自選名單（徹底消滅 line 102 的 KeyError）
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = load_json(WATCHLIST_FILE, DEFAULT_STOCKS)
 
@@ -177,7 +171,7 @@ with tab_radar:
                 with st.container():
                     c1, c2, c3, c4 = st.columns([2, 2, 2, 2])
                     c1.markdown(f"### **{s['name']} ({s['code']})**")
-                    c1.caption(f"最新收盤：${s['close']} ｜ 支撐：{s['support']}")
+                    c1.caption(f"最新收盤：${s['close']} ｜ 支撐：{s['support']} ｜ 股本：{s['cap']}億")
                     c2.write(f"• 投信買超：`+{s['trust_buy']}` 張 ｜ 營收 YoY：`+{s['rev_yoy']}%`")
                     c3.write(f"• 建議掛單區間：`\({s['buy_min']} ~\){s['buy_max']}` ｜ 停損：`${s['stop_loss']}`")
                     
@@ -323,8 +317,13 @@ with tab_batch:
                 df['VOL_MA5'] = df['Volume'].rolling(5).mean()
                 df['VOL_MA20'] = df['Volume'].rolling(20).mean()
 
-                # 💡 若最新一筆資料的時間等於今天且尚未收盤，取前一日已定案的收盤數據比對
-                latest = df.iloc[-2] if len(df) >= 2 and df.index[-1].date() == datetime.date.today() else df.iloc[-1]
+                now_t = datetime.datetime.now().time()
+                is_trading_hours = (datetime.time(9, 0) <= now_t <= datetime.time(13, 35))
+                if is_trading_hours and len(df) >= 2:
+                    latest = df.iloc[-2]
+                else:
+                    latest = df.iloc[-1]
+
                 close, vol, low, high, open_p = float(latest['Close']), float(latest['Volume']), float(latest['Low']), float(latest['High']), float(latest['Open'])
                 ma5, ma10, ma20 = float(latest['MA5']), float(latest['MA10']), float(latest['MA20'])
                 vol_ma5, vol_ma20 = float(latest['VOL_MA5']), float(latest['VOL_MA20'])
@@ -410,7 +409,13 @@ with tab_single:
                 df['VOL_MA5'] = df['Volume'].rolling(5).mean()
                 df['VOL_MA20'] = df['Volume'].rolling(20).mean()
 
-                latest = df.iloc[-1]
+                now_t = datetime.datetime.now().time()
+                is_trading_hours = (datetime.time(9, 0) <= now_t <= datetime.time(13, 35))
+                if is_trading_hours and len(df) >= 2:
+                    latest = df.iloc[-2]
+                else:
+                    latest = df.iloc[-1]
+
                 close, vol, low, high, open_p = float(latest['Close']), float(latest['Volume']), float(latest['Low']), float(latest['High']), float(latest['Open'])
                 ma5, ma10, ma20 = float(latest['MA5']), float(latest['MA10']), float(latest['MA20'])
                 vol_ma5, vol_ma20 = float(latest['VOL_MA5']), float(latest['VOL_MA20'])
@@ -424,9 +429,9 @@ with tab_single:
                 is_ready = cond_trend and cond_support and cond_vol and cond_k
 
                 c_out1, c_out2, c_out3 = st.columns(3)
-                c_out1.metric("最新收盤價", f"${close:,.1f}")
+                c_out1.metric("診斷收盤基準", f"${close:,.1f}")
                 c_out2.metric(f"防守 {target_ma_choice}", f"${target_ma:,.1f}")
-                c_out3.metric("當日成交量", f"{int(vol):,d}")
+                c_out3.metric("成交量", f"{int(vol):,d}")
 
                 if is_ready:
                     sl_p = high * (1 - stop_loss_pct / 100)
@@ -451,49 +456,34 @@ with tab_single:
                 fig.update_layout(xaxis_rangeslider_visible=False, height=420, margin=dict(l=10, r=10, t=10, b=10))
                 st.plotly_chart(fig, use_container_width=True)
 
-# ================= TAB 4: 策略手冊與 SOP 指南 =================
+# ================= TAB 4: 策略手冊與 SOP 指南 (原生卡片架構，絕不溢出) =================
 with tab_docs:
     st.subheader("📖 短線成長股・量縮深蹲 (Squat & Rebound) 全流程作戰手冊 V2.0")
-    st.markdown("""
-本系統專為**「不盯盤、每日 16:30 離線決策、次日開盤智慧單自動執行」**設計。全系統以數學期望值（Edge）為導向，從**選股漏斗、形態判定、右側確認、出場紀律到部位風控**，均有嚴格定義之標準作業程序（SOP）。
+    st.info("💡 本系統專為「不盯盤、每日 16:30 離線決策、次日開盤智慧單自動執行」設計，具備標準作業程序（SOP）。")
 
----
-### 🔍 一、 盤後全自動獵股漏斗 SOP（3 → 1 → 2 順序過濾）
-每日 16:30 證交所盤後總表出爐後，雷達依序執行三道嚴格過濾，全台股 1,800 檔通常僅留存 5～12 檔：
+    with st.expander("🔍 一、 盤後全自動獵股漏斗 SOP（3 → 1 → 2 順序過濾）", expanded=True):
+        st.write("• **步驟 3【籌碼鎖定度與階梯門檻】**：最新日投信買超 >= 50 張；若股本在 60 億~150 億，門檻提高至 >= 250 張。")
+        st.write("• **步驟 1【放寬股本規模 (20億 ~ 150億)】**：鎖定 20~60 億中型成長股與 60~150 億旗艦領頭羊（如欣興、技嘉），排除 > 150 億權值牛皮股。")
+        st.write("• **步驟 2【業績加速動能】**：最新公告單月營收年增率 YoY > 20%，具實質基本面保護。")
 
-* 📡 **步驟 3【籌碼鎖定度】**：
-  * **門檻**：最新交易日投信買超 $\ge 50$ 張，或**近 5 個交易日內投信累計買超 $\ge 100$ 張**。
-  * **原理**：法人籌碼具延續性。鎖定法人已大舉進駐、籌碼沉澱且成本相近之標的，排除無主力照應之冷門股。
-* 🏢 **步驟 1【股本輕巧度】**：
-  * **門檻**：實收資本額介於 **20 億元 ～ 60 億元台幣** 之間（優先鎖定半導體、AI 供應鏈、電子零組件等科技成長股）。
-  * **原理**：大型權值股推升需龐大資金，爆發力差；小型股易被操弄。20～60 億為法人推升勝率與爆發力之黃金區間。
-* 📈 **步驟 2【業績加速動能】**：
-  * **門檻**：最新公告之單月營收年增率 **YoY > 20%**，具實質業績保護。
-  * **原理**：無基本面題材炒作股回檔多為假突破；雙位數成長股回踩均線具實質買盤承接。
+    with st.expander("🧘 二、 盤後「量縮深蹲 (Squat)」技術面檢驗 SOP", expanded=True):
+        st.write("• **條件 1【均線多頭排列】**：收盤價位於多頭排列（5MA > 10MA > 20MA），且 20 日均線（月線）斜率向上。")
+        st.write("• **條件 2【均線精確回踩】**：最低價回測 10MA 或 20MA 緩衝區（Low <= MA * 1.018），收盤未跌破（Close >= MA * 0.99）。")
+        st.write("• **條件 3【極致成交窒息量】**：當日成交量同時低於 5 日均量（5MV）與 20 日均量（20MV），代表浮額洗淨。")
+        st.write("• **條件 4【K 棒實體收斂】**：當日 K 棒實體振幅 <= 3.5%，禁止長黑實體。")
 
----
-### 🧘 二、 盤後「量縮深蹲 (Squat)」技術面檢驗 SOP
-* 📐 **條件 1【均線多頭排列】**：收盤價位於多頭架構，即 **5MA > 10MA > 20MA**，且 20 日均線（月線）斜率向上。
-* 🎯 **條件 2【均線精確回踩】**：當日最低價回測 10MA 或 20MA 緩衝區（`Low <= MA * 1.018`），且收盤未實質跌破（`Close >= MA * 0.99`）。
-* 🧊 **條件 3【極致成交窒息量】**：當日成交量同時低於 **5 日均量（5MV）** 與 **20 日均量（20MV）**，代表浮額洗淨、賣壓竭盡。
-* 🕯️ **條件 4【K 棒實體收斂】**：當日 K 棒實體振幅 **$\le 3.5\%$**，禁止長黑實體。
+    with st.expander("🏹 三、 盤中「右側確認」掛單進場 SOP", expanded=True):
+        st.write("• **大盤多頭濾網**：加權指數收盤必須站穩 20MA（月線）之上。若大盤處於月線反壓，全市場雷達強制休眠。")
+        st.write("• **次日右側過高確認**：訊號成立次日，盤中最高價突破深蹲日最高點才准掛單進場；未突破則一律放棄建倉。")
 
----
-### 🏹 三、 盤中「右側確認」掛單進場 SOP
-* 🚦 **大盤多頭濾網**：加權指數收盤必須站穩 **20MA（月線）之上**。若大盤處於月線反壓，全市場雷達強制休眠，**嚴格禁止開新倉**。
-* 🎯 **次日右側過高確認**：訊號成立次日，**盤中最高價突破深蹲日最高點**才准掛單進場；若未突破視為轉折失敗，**一律放棄建倉**。
+    with st.expander("🛑 四、 嚴格五大出場紀律 SOP", expanded=True):
+        st.write("• **🛑 防線 1【硬停損線 (-4.0%)】**：跌破成本價之 -4.0%，無條件市價全數砍單。")
+        st.write("• **⏳ 防線 2【時間停損 (4天)】**：持有滿 4 天漲幅未達 +3%，第 5 天開盤平手換股。")
+        st.write("• **🛡️ 防線 3【動態保本機制 (+4.0%)】**：盤中浮盈達 +4.0% 時，次日起停損防線調升至成本價 (+0.2%)，消滅賺變賠。")
+        st.write("• **🎯 防線 4【第一階段停利 (+8.0%)】**：觸及成本價 +8.0% 時，掛單賣出部位 A（50% 股數）鎖住勝果。")
+        st.write("• **🏄 防線 5【第二階段波段落袋 (破 10MA)】**：剩餘部位 B 只要收盤跌破 10MA，次日開盤市價出清。")
+        st.write("• **❄️ 防線 6【停損冷卻機制】**：若觸發硬停損，7～10 個交易日內禁止重複買進同一檔股票。")
 
----
-### 🛑 四、 嚴格五大出場紀律 SOP
-* 🛑 **防線 1【硬停損線 (-4.0%)】**：跌破成本價之 **-4.0%**，無條件市價全數砍單。
-* ⏳ **防線 2【時間停損 (4天)】**：持有滿 **4 天** 漲幅未達 +3%，**第 5 天開盤平手換股**。
-* 🛡️ **防線 3【動態保本機制 (+4.0%)】**：盤中浮盈達 **+4.0%** 時，次日起停損防線調升至 **成本價 (+0.2%)**，徹底消滅賺變賠。
-* 🎯 **防線 4【第一階段停利 (+8.0%)】**：觸及成本價 **+8.0%** 時，掛單賣出 **部位 A（50% 股數）** 鎖住勝果。
-* 🏄 **防線 5【第二階段波段落袋 (破 10MA)】**：剩餘部位 B 只要收盤跌破 10MA，**次日開盤市價全數出清**。
-* ❄️ **防線 6【停損冷卻機制】**：若觸發硬停損，**7～10 個交易日內禁止重複買進同一檔股票**。
-
----
-### 💼 五、 60 萬元資金與部位管理模型 SOP
-* 🏦 **三槽位配置**：總資金 60 萬元切分為 **3 槽位，每槽上限 20 萬元**。單筆極限虧損鎖死在總資金之 **1.33%**。
-* 🛡️ **回撤熔斷機制**：歷程回撤超 **-10%** 時，槽位下單預算降為 **14 萬元（7 折）**，防禦至淨值回升至 95% 以上。
-    """)
+    with st.expander("💼 五、 60 萬元資金與部位管理模型 SOP", expanded=True):
+        st.write("• **三槽位配置**：總資金 60 萬元切分為 3 槽位，每槽上限 20 萬元。單筆極限虧損鎖死在總資金之 1.33%。")
+        st.write("• **回撤熔斷機制**：歷程回撤超 -10% 時，槽位下單預算降為 14 萬元（7 折），防禦至淨值回升至 95% 以上。")
