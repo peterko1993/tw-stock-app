@@ -323,7 +323,8 @@ with tab_batch:
                 df['VOL_MA5'] = df['Volume'].rolling(5).mean()
                 df['VOL_MA20'] = df['Volume'].rolling(20).mean()
 
-                latest = df.iloc[-1]
+                # 💡 若最新一筆資料的時間等於今天且尚未收盤，取前一日已定案的收盤數據比對
+                latest = df.iloc[-2] if len(df) >= 2 and df.index[-1].date() == datetime.date.today() else df.iloc[-1]
                 close, vol, low, high, open_p = float(latest['Close']), float(latest['Volume']), float(latest['Low']), float(latest['High']), float(latest['Open'])
                 ma5, ma10, ma20 = float(latest['MA5']), float(latest['MA10']), float(latest['MA20'])
                 vol_ma5, vol_ma20 = float(latest['VOL_MA5']), float(latest['VOL_MA20'])
