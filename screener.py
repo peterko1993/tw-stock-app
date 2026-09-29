@@ -35,20 +35,32 @@ def run_screener():
         print("❌ 無法取得法人日報，終止執行。")
         return
 
+    # 過濾 4 碼純股票
     df_t86 = df_t86[df_t86['證券代號'].str.match(r'^\d{4}$')]
     trust_col = [c for c in df_t86.columns if "投信" in c and "買賣超" in c][0]
     df_t86['投信買賣超張數'] = df_t86[trust_col].str.replace(',', '').astype(float) / 1000
+    
+    # 基礎前置過濾：投信買超至少大於等於 50 張
     df_step3 = df_t86[df_t86['投信買賣超張數'] >= 50][['證券代號', '證券名稱', '投信買賣超張數']].copy()
 
-    print("📡 [2/4] 比對股本規模 (20億 ~ 60億)...")
+    print("📡 [2/4] 依『階梯式股本與籌碼門檻 (20億~150億)』進行雙向比對...")
     url_cap = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
     res_cap = requests.get(url_cap, headers=headers, timeout=10)
     df_cap = pd.DataFrame(res_cap.json())[['公司代號', '實收資本額']].copy()
     df_cap['股本(億)'] = pd.to_numeric(df_cap['實收資本額'], errors='coerce') / 100_000_000
-    df_step1 = pd.merge(df_step3, df_cap, left_on='證券代號', right_on='公司代號', how='inner')
-    df_step1 = df_step1[(df_step1['股本(億)'] >= 20.0) & (df_step1['股本(億)'] <= 60.0)]
+    
+    df_merged = pd.merge(df_step3, df_cap, left_on='證券代號', right_on='公司代號', how='inner')
 
-    print("📡 [3/4] 比對最新月營收 (YoY > 20%)...")
+    # 💡 核心升級：階梯式條件判斷
+    # 級距 A：股本 20 億 ~ 60 億 ── 投信買超 >= 50 張
+    cond_tier_a = (df_merged['股本(億)'] >= 20.0) & (df_merged['股本(億)'] <= 60.0) & (df_merged['投信買賣超張數'] >= 50)
+    # 級距 B：股本 60 億 ~ 150 億 ── 投信買超門檻提高為 >= 150 張 (確保法人重押)
+    cond_tier_b = (df_merged['股本(億)'] > 60.0) & (df_merged['股本(億)'] <= 150.0) & (df_merged['投信買賣超張數'] >= 150)
+
+    df_step1 = df_merged[cond_tier_a | cond_tier_b].copy()
+    print(f"   階梯式過濾完成：留存 {len(df_step1)} 檔標的（含 20~60 億中型股與 60~150 億重押旗艦股）")
+
+    print("📡 [3/4] 比對最新月營收動能 (YoY > 20%)...")
     url_rev = "https://openapi.twse.com.tw/v1/opendata/t187ap05_L"
     res_rev = requests.get(url_rev, headers=headers, timeout=10)
     df_rev_raw = pd.DataFrame(res_rev.json())
@@ -103,10 +115,13 @@ def run_screener():
             is_squat = cond_trend and cond_support and cond_vol and cond_k
             if is_squat: total_squat_count += 1
 
+            tier_label = "20~60億中型" if row['股本(億)'] <= 60 else "60~150億重押"
+
             item_data = {
                 "name": name, "code": code, "ticker": ticker,
                 "close": round(close, 1), "trust_buy": int(row['投信買賣超張數']),
-                "cap": round(float(row['股本(億)']), 1), "rev_yoy": round(float(row['營收YoY(%)']), 1),
+                "cap": round(float(row['股本(億)']), 1), "tier": tier_label,
+                "rev_yoy": round(float(row['營收YoY(%)']), 1),
                 "is_squat": bool(is_squat), "support": support_name,
                 "buy_min": round(target_ma, 1), "buy_max": round(close, 1),
                 "stop_loss": round(target_ma * 0.96, 1), "take_profit": round(close * 1.08, 1)
@@ -122,11 +137,10 @@ def run_screener():
         "stocks": report_items
     }
 
-    # 💡 核心修復：僅儲存 radar_report.json，絕對不覆寫使用者的 watchlist.json
     with open(REPORT_FILE, "w", encoding="utf-8") as f:
         json.dump(report_data, f, ensure_ascii=False, indent=2)
 
-    print(f"✅ 戰報生成完畢！共記錄 {len(report_items)} 檔獵物至 {REPORT_FILE}")
+    print(f"✅ 戰報生成完畢！共記錄 {len(report_items)} 檔標的至 {REPORT_FILE}")
 
 if __name__ == "__main__":
     run_screener()
