@@ -22,8 +22,31 @@ DEFAULT_STOCKS = {
     "欣興 (3037)": "3037.TW", "奇鋐 (3017)": "3017.TW",
     "雙鴻 (3324)": "3324.TWO", "台燿 (6274)": "6274.TWO",
     "智邦 (2345)": "2345.TW", "金像電 (2368)": "2368.TW",
-    "致伸 (4915)": "4915.TW"
+    "致伸 (4915)": "4915.TW", "系統電 (5309)": "5309.TWO"
 }
+
+# 💡 官方台股產業代碼對照表（徹底將數字代碼轉為中文）
+TW_INDUSTRY_MAP = {
+    "01": "水泥工業", "02": "食品工業", "03": "塑膠工業", "04": "紡織纖維",
+    "05": "電機機械", "06": "電器電纜", "07": "化學生技", "08": "玻璃陶瓷",
+    "09": "造紙工業", "10": "鋼鐵工業", "11": "橡膠工業", "12": "汽車工業",
+    "13": "電子工業", "14": "建材營造", "15": "航運業", "16": "觀光餐旅",
+    "17": "金融保險業", "18": "貿易百貨業", "19": "綜合", "20": "其他業",
+    "21": "化學工業", "22": "生技醫療業", "23": "油電燃氣業", "24": "半導體業",
+    "25": "電腦及週邊設備業", "26": "光電業", "27": "通信網路業", "28": "電子零組件業",
+    "29": "電子通路業", "30": "資訊服務業", "31": "其他電子業", "32": "文化創意業",
+    "33": "農業科技業", "34": "電子商務業", "35": "綠能環保", "36": "數位雲端",
+    "37": "運動休閒", "38": "居家生活"
+}
+
+def translate_industry(ind_raw):
+    raw_str = str(ind_raw).strip()
+    if raw_str in TW_INDUSTRY_MAP:
+        return TW_INDUSTRY_MAP[raw_str]
+    for code, name in TW_INDUSTRY_MAP.items():
+        if code in raw_str:
+            return name
+    return raw_str if raw_str and raw_str not in ["None", "nan", ""] else "電子科技"
 
 def load_json(filepath, default):
     if not os.path.exists(filepath): return default
@@ -84,11 +107,10 @@ def get_twii_market_status():
     except Exception: pass
     return True, 0, 0
 
-# 💡【核心功能】：整合全台股上市 (TWSE) 與上櫃 (TPEx) 官方主資料庫
+# 💡 官方台股資料庫快取（上市 + 上櫃全覆蓋）
 @st.cache_data(ttl=86400)
 def get_all_taiwan_stocks():
     stocks = {
-        # 內建常見上櫃/上市科技熱門股備援
         "5309": {"code": "5309", "name": "系統電", "market": ".TWO", "market_name": "上櫃", "industry": "電腦及週邊設備業", "cap": 19.5},
         "3324": {"code": "3324", "name": "雙鴻", "market": ".TWO", "market_name": "上櫃", "industry": "電腦及週邊設備業", "cap": 8.8},
         "6274": {"code": "6274", "name": "台燿", "market": ".TWO", "market_name": "上櫃", "industry": "電子零組件業", "cap": 27.2},
@@ -99,10 +121,10 @@ def get_all_taiwan_stocks():
         "3017": {"code": "3017", "name": "奇鋐", "market": ".TW", "market_name": "上市", "industry": "電腦及週邊設備業", "cap": 38.8},
         "2345": {"code": "2345", "name": "智邦", "market": ".TW", "market_name": "上市", "industry": "通信網路業", "cap": 56.4},
         "2368": {"code": "2368", "name": "金像電", "market": ".TW", "market_name": "上市", "industry": "電子零組件業", "cap": 49.3},
-        "4915": {"code": "4915", "name": "致伸", "market": ".TW", "market_name": "上市", "industry": "電腦及週邊設備業", "cap": 45.6}
+        "4915": {"code": "4915", "name": "致伸", "market": ".TW", "market_name": "上市", "industry": "電子零組件業", "cap": 45.6}
     }
     
-    # 1. 抓取證交所 (TWSE) 上市公司資料
+    # 1. 抓取證交所 (TWSE) 上市公司
     try:
         url_l = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
         res_l = requests.get(url_l, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
@@ -110,14 +132,16 @@ def get_all_taiwan_stocks():
             for item in res_l.json():
                 c = item.get("公司代號", "").strip()
                 n = item.get("公司簡稱", "").strip() or item.get("公司名稱", "").strip()
-                ind = item.get("產業別", "上市企業")
+                ind_raw = item.get("產業別", "")
                 cap_s = float(item.get("實收資本額", 0)) / 100_000_000
                 if c and n:
-                    stocks[c] = {"code": c, "name": n, "market": ".TW", "market_name": "上市", "industry": ind if ind else "上市企業", "cap": round(cap_s, 1)}
-    except Exception:
-        pass
+                    stocks[c] = {
+                        "code": c, "name": n, "market": ".TW", "market_name": "上市",
+                        "industry": translate_industry(ind_raw), "cap": round(cap_s, 1)
+                    }
+    except Exception: pass
 
-    # 2. 抓取櫃買中心 (TPEx) 上櫃公司資料（例如：系統電 5309）
+    # 2. 抓取櫃買中心 (TPEx) 上櫃公司
     try:
         url_o = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"
         res_o = requests.get(url_o, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
@@ -125,17 +149,19 @@ def get_all_taiwan_stocks():
             for item in res_o.json():
                 c = str(item.get("SecuritiesCompanyCode", "")).strip() or str(item.get("公司代號", "")).strip()
                 n = str(item.get("CompanyBriefName", "")).strip() or str(item.get("公司簡稱", "")).strip()
-                ind = str(item.get("SectorName", "上櫃企業")).strip() or str(item.get("產業別", "上櫃企業")).strip()
+                ind_raw = str(item.get("SectorName", "")).strip() or str(item.get("產業別", "")).strip()
                 cap_raw = float(item.get("PaidInCapital", 0) or item.get("實收資本額", 0))
                 cap_s = cap_raw / 100_000_000
                 if c and n:
-                    stocks[c] = {"code": c, "name": n, "market": ".TWO", "market_name": "上櫃", "industry": ind if ind else "上櫃企業", "cap": round(cap_s, 1)}
-    except Exception:
-        pass
+                    stocks[c] = {
+                        "code": c, "name": n, "market": ".TWO", "market_name": "上櫃",
+                        "industry": translate_industry(ind_raw), "cap": round(cap_s, 1)
+                    }
+    except Exception: pass
 
     return stocks
 
-# 💡【核心功能】：智慧解析使用者輸入（代碼或名稱擇一皆可）
+# 💡 智慧解析輸入（支援代號或名稱擇一）
 def resolve_taiwan_stock(query):
     q = query.strip()
     if not q:
@@ -143,16 +169,13 @@ def resolve_taiwan_stock(query):
     
     universe = get_all_taiwan_stocks()
     
-    # 1. 以純代號精準比對 (例如輸入：5309 或 2330)
     if q in universe:
         return universe[q], None
         
-    # 2. 以名稱完全比對 (例如輸入：系統電 或 台積電)
     for c, s in universe.items():
         if s['name'] == q:
             return s, None
             
-    # 3. 名稱包含或代號包含模糊比對
     candidates = [s for s in universe.values() if (q in s['name']) or (q == s['code'])]
     if len(candidates) == 1:
         return candidates[0], None
@@ -160,7 +183,7 @@ def resolve_taiwan_stock(query):
         cand_str = "、".join([f"{c['name']} ({c['code']})" for c in candidates[:4]])
         return None, f"找到多檔符合標的：{cand_str}，請輸入更精確的名稱或 4 碼代號！"
         
-    # 4. 針對特殊 ETF 或未及時同步之代號，透過 yfinance 實測探測
+    # 透過 yfinance 動態偵測防呆
     if q.isdigit() or (len(q) >= 4 and q[:4].isdigit()):
         for sfx, m_name in [(".TW", "上市"), (".TWO", "上櫃")]:
             try:
@@ -168,14 +191,15 @@ def resolve_taiwan_stock(query):
                 h = t.history(period="5d")
                 if not h.empty:
                     s_name = t.info.get("shortName") or q
+                    shares = t.fast_info.get("shares") or 0
+                    calc_cap = round((shares * 10) / 100_000_000, 1) if shares else 0.0
                     return {
                         "code": q, "name": s_name, "market": sfx,
-                        "market_name": m_name, "industry": "上市櫃企業", "cap": 0.0
+                        "market_name": m_name, "industry": "電子科技", "cap": calc_cap
                     }, None
-            except Exception:
-                pass
+            except Exception: pass
 
-    return None, f"查無台股標的「{q}」，請確認名稱是否正確（例如輸入：系統電 或 5309）！"
+    return None, f"查無台股標的「{q}」，請確認名稱是否正確！"
 
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = load_json(WATCHLIST_FILE, DEFAULT_STOCKS)
@@ -267,7 +291,7 @@ with tab_radar:
                     c1, c2, c3, c4 = st.columns([2.2, 1.8, 2.0, 2.0])
                     c1.markdown(f"### **{s_name} ({s_code})**")
                     c1.caption(f"最新收盤：${s['close']} ｜ 踩中：**{s['support']}**")
-                    c1.write(f"🏷️ **類股**：`{s.get('industry', '電子科技')}`")
+                    c1.write(f"🏷️ **類股**：`{translate_industry(s.get('industry', '電子科技'))}`")
                     c1.write(f"🏢 **規模**：`{s.get('cap_bracket', str(s.get('cap', '')) + '億')}`")
                     
                     c2.write(f"• **投信買超**：`+{s['trust_buy']}` 張")
@@ -568,15 +592,13 @@ with tab_single:
                 fig.update_layout(xaxis_rangeslider_visible=False, height=420, margin=dict(l=10, r=10, t=10, b=10))
                 st.plotly_chart(fig, use_container_width=True)
 
-# ================= TAB 5: 自選股票清單總覽 (名稱或代號擇一智慧搜尋) =================
+# ================= TAB 5: 自選股票清單總覽 (中文產業 + 上市櫃全支援) =================
 with tab_watchlist:
     st.subheader("📋 自選股票清單總覽儀表板 (Watchlist Overview)")
     
-    # 💡 升級：名稱或代號擇一智慧搜尋輸入
     with st.expander("⚙️ 快速管理自選名單 (在此新增 / 剔除標的)", expanded=False):
         c_add, c_del = st.columns(2)
         
-        # 1. 智慧新增
         with c_add:
             st.markdown("##### ➕ 新增標的至自選清單 (智慧二合一)")
             t5_smart_query = st.text_input("輸入股票名稱 或 4 碼代號", placeholder="例如：系統電 或 5309 或 鴻海", key="t5_smart_query")
@@ -591,7 +613,6 @@ with tab_watchlist:
                 else:
                     st.error(err)
 
-        # 2. 快速剔除
         with c_del:
             st.markdown("##### 🗑️ 從自選清單剔除標的")
             if st.session_state.watchlist:
@@ -624,11 +645,21 @@ with tab_watchlist:
                 code = ticker.replace(".TW", "").replace(".TWO", "").strip()
                 name = label.split(" (")[0]
                 
-                # 自動對應上市/上櫃官方產業與資本額
-                p_info = profiles.get(code, {"industry": "上市櫃企業", "cap": 0.0})
-                ind = p_info["industry"]
-                cap_val = p_info["cap"]
+                # 取得產業與股本資訊
+                p_info = profiles.get(code, {})
+                ind_text = translate_industry(p_info.get("industry", "電子科技"))
+                cap_val = float(p_info.get("cap", 0.0))
                 
+                # 💡 若股本未提供，自動連線 yfinance 即時以股數反算股本 (防呆機制)
+                if cap_val <= 0.0:
+                    try:
+                        t_obj = yf.Ticker(ticker)
+                        shares_out = t_obj.fast_info.get("shares") or 0
+                        if shares_out:
+                            cap_val = round((shares_out * 10) / 100_000_000, 1)
+                    except Exception:
+                        pass
+
                 if cap_val <= 0:
                     cap_bracket_label = "未提供"
                 elif cap_val < 20.0:
@@ -690,7 +721,7 @@ with tab_watchlist:
 
                 overview_rows.append({
                     "標的代號": label,
-                    "產業類別": ind,
+                    "產業類別": ind_text,
                     "股本規模區間": cap_bracket_label,
                     "最新收盤價": f"${c_today:,.1f}" if c_today > 0 else "無資料",
                     "今日漲跌%": f"{change_pct:+.2f}%" if c_today > 0 else "-",
@@ -762,3 +793,4 @@ with tab_docs:
     with st.expander("💼 五、 60 萬元資金與部位管理模型 SOP", expanded=True):
         st.write("• **三槽位配置**：總資金 60 萬元切分為 3 槽位，每槽上限 20 萬元。單筆極限虧損鎖死在總資金之 1.33%。")
         st.write("• **回撤熔斷機制**：歷程回撤超 -10% 時，槽位下單預算降為 14 萬元（7 折），防禦至淨值回升至 95% 以上。")
+        
