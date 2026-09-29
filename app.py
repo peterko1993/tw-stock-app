@@ -135,10 +135,10 @@ with st.sidebar:
 
     st.header("📋 觀察名單管理")
     with st.expander("➕ 新增自選股票", expanded=False):
-        new_name = st.text_input("股票名稱")
-        new_code = st.text_input("4 碼代號")
-        new_market = st.selectbox("市場類別", ["上市 (.TW)", "上櫃 (.TWO)"], index=0)
-        if st.button("確認加入清單", type="primary", use_container_width=True):
+        new_name = st.text_input("股票名稱", key="sb_new_name")
+        new_code = st.text_input("4 碼代號", key="sb_new_code")
+        new_market = st.selectbox("市場類別", ["上市 (.TW)", "上櫃 (.TWO)"], index=0, key="sb_new_mkt")
+        if st.button("確認加入清單", type="primary", use_container_width=True, key="sb_btn_add"):
             clean_code, clean_name = new_code.strip(), new_name.strip()
             if clean_code and clean_name:
                 suffix = ".TW" if "上市" in new_market else ".TWO"
@@ -150,8 +150,8 @@ with st.sidebar:
 
     with st.expander("🗑️ 刪除自選股票", expanded=False):
         if st.session_state.watchlist:
-            del_target = st.selectbox("選擇要移除的標的", options=list(st.session_state.watchlist.keys()))
-            if st.button("確認刪除", use_container_width=True):
+            del_target = st.selectbox("選擇要移除的標的", options=list(st.session_state.watchlist.keys()), key="sb_del_target")
+            if st.button("確認刪除", use_container_width=True, key="sb_btn_del"):
                 del st.session_state.watchlist[del_target]
                 save_json(WATCHLIST_FILE, st.session_state.watchlist)
                 st.success(f"已移除：{del_target}")
@@ -179,7 +179,7 @@ tab_radar, tab_tracker, tab_batch, tab_single, tab_watchlist, tab_docs = st.tabs
     "📖 策略手冊與 SOP 指南"
 ])
 
-# ================= TAB 0: 每日雷達戰報 (安全修復新聞連結) =================
+# ================= TAB 0: 每日雷達戰報 =================
 with tab_radar:
     st.subheader("📡 全自動獵股雷達・今日盤後戰報")
     report = load_json(REPORT_FILE, {})
@@ -226,7 +226,6 @@ with tab_radar:
                     else:
                         c4.write("✅ 已在自選觀察清單中")
                         
-                    # 💡 安全構造外部連結，徹底消除語法衝突
                     yahoo_url = s.get('yahoo_news') or f"https://tw.stock.yahoo.com/quote/{s_code}/news"
                     google_url = s.get('google_news') or f"https://www.google.com/search?q={s_name}+{s_code}+股票&tbm=nws&tbs=qdr:m"
                     cnyes_url = s.get('cnyes_news') or f"https://invest.cnyes.com/twstock/TWS/{s_code}/news"
@@ -508,15 +507,48 @@ with tab_single:
                 fig.update_layout(xaxis_rangeslider_visible=False, height=420, margin=dict(l=10, r=10, t=10, b=10))
                 st.plotly_chart(fig, use_container_width=True)
 
-# ================= TAB 5: 自選股票清單總覽 =================
+# ================= TAB 5: 自選股票清單總覽 (內建新增/剔除股票功能) =================
 with tab_watchlist:
     st.subheader("📋 自選股票清單總覽儀表板 (Watchlist Overview)")
     
+    # 💡 核心新增：在 TAB 5 頂部直接提供「新增 / 剔除」管理面板
+    with st.expander("⚙️ 快速管理自選名單 (在此新增 / 剔除標的)", expanded=False):
+        c_add, c_del = st.columns(2)
+        
+        # 1. 快速新增
+        with c_add:
+            st.markdown("##### ➕ 新增標的至自選清單")
+            t5_name = st.text_input("股票名稱", key="t5_in_name", placeholder="例如：技嘉")
+            t5_code = st.text_input("4 碼代號", key="t5_in_code", placeholder="例如：2376")
+            t5_mkt = st.selectbox("市場別", ["上市 (.TW)", "上櫃 (.TWO)"], key="t5_in_mkt")
+            if st.button("確認加入自選名單", key="t5_btn_add", type="primary", use_container_width=True):
+                clean_c, clean_n = t5_code.strip(), t5_name.strip()
+                if clean_c and clean_n:
+                    sfx = ".TW" if "上市" in t5_mkt else ".TWO"
+                    lbl = f"{clean_n} ({clean_c})"
+                    st.session_state.watchlist[lbl] = f"{clean_c}{sfx}"
+                    save_json(WATCHLIST_FILE, st.session_state.watchlist)
+                    st.success(f"已成功新增：{lbl}！")
+                    st.rerun()
+
+        # 2. 快速剔除
+        with c_del:
+            st.markdown("##### 🗑️ 從自選清單剔除標的")
+            if st.session_state.watchlist:
+                t5_del_target = st.selectbox("選擇要剔除的股票", options=list(st.session_state.watchlist.keys()), key="t5_in_del")
+                if st.button("確認從清單剔除", key="t5_btn_del", use_container_width=True):
+                    del st.session_state.watchlist[t5_del_target]
+                    save_json(WATCHLIST_FILE, st.session_state.watchlist)
+                    st.success(f"已成功移除：{t5_del_target}！")
+                    st.rerun()
+            else:
+                st.info("目前自選清單中無任何標的。")
+
     profiles = get_company_profiles()
     watchlist_items = list(st.session_state.watchlist.items())
     
     if not watchlist_items:
-        st.info("目前自選清單為空，可由側邊欄或雷達戰報加入股票。")
+        st.info("目前自選清單為空，可點擊上方「快速管理自選名單」或由雷達戰報加入股票。")
     else:
         with st.spinner("正在取得自選股即時產業、規模與行情指標..."):
             tickers = [t for _, t in watchlist_items]
