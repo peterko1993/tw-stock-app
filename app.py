@@ -25,7 +25,7 @@ DEFAULT_STOCKS = {
     "致伸 (4915)": "4915.TW", "系統電 (5309)": "5309.TWO"
 }
 
-# 💡 官方台股產業代碼對照表（徹底將數字代碼轉為中文）
+# 官方台股產業代碼對照表（徹底將數字代碼轉為中文）
 TW_INDUSTRY_MAP = {
     "01": "水泥工業", "02": "食品工業", "03": "塑膠工業", "04": "紡織纖維",
     "05": "電機機械", "06": "電器電纜", "07": "化學生技", "08": "玻璃陶瓷",
@@ -107,7 +107,7 @@ def get_twii_market_status():
     except Exception: pass
     return True, 0, 0
 
-# 💡 官方台股資料庫快取（上市 + 上櫃全覆蓋）
+# 官方台股資料庫快取（上市 + 上櫃全覆蓋）
 @st.cache_data(ttl=86400)
 def get_all_taiwan_stocks():
     stocks = {
@@ -161,7 +161,7 @@ def get_all_taiwan_stocks():
 
     return stocks
 
-# 💡 智慧解析輸入（支援代號或名稱擇一）
+# 智慧解析輸入（支援代號或名稱擇一）
 def resolve_taiwan_stock(query):
     q = query.strip()
     if not q:
@@ -183,7 +183,6 @@ def resolve_taiwan_stock(query):
         cand_str = "、".join([f"{c['name']} ({c['code']})" for c in candidates[:4]])
         return None, f"找到多檔符合標的：{cand_str}，請輸入更精確的名稱或 4 碼代號！"
         
-    # 透過 yfinance 動態偵測防呆
     if q.isdigit() or (len(q) >= 4 and q[:4].isdigit()):
         for sfx, m_name in [(".TW", "上市"), (".TWO", "上櫃")]:
             try:
@@ -285,7 +284,7 @@ with tab_radar:
             st.success(f"🎯 **【今日焦點】：共發現 {len(squat_stocks)} 檔精準符合「量縮深蹲」進場門檻！**")
             for s in squat_stocks:
                 s_name = s.get('name', '')
-                s_code = s.get('code', '')
+                s_code = str(s.get('code', '')).split('.')[0].strip()
                 
                 with st.container():
                     c1, c2, c3, c4 = st.columns([2.2, 1.8, 2.0, 2.0])
@@ -311,9 +310,9 @@ with tab_radar:
                     else:
                         c4.write("✅ 已在自選觀察清單中")
                         
-                    yahoo_url = s.get('yahoo_news') or f"https://tw.stock.yahoo.com/quote/{s_code}/news"
-                    google_url = s.get('google_news') or f"https://www.google.com/search?q={s_name}+{s_code}+股票&tbm=nws&tbs=qdr:m"
-                    cnyes_url = s.get('cnyes_news') or f"https://invest.cnyes.com/twstock/TWS/{s_code}/news"
+                    yahoo_url = f"https://tw.stock.yahoo.com/quote/{s_code}/news"
+                    google_url = f"https://www.google.com/search?q={s_name}+{s_code}+股票&tbm=nws&tbs=qdr:m"
+                    cnyes_url = f"https://invest.cnyes.com/twstock/TWS/{s_code}/news"
 
                     with st.expander(f"📰 查看 {s_name} 近半個月新聞與產業速查", expanded=False):
                         n1, n2, n3 = st.columns(3)
@@ -592,7 +591,7 @@ with tab_single:
                 fig.update_layout(xaxis_rangeslider_visible=False, height=420, margin=dict(l=10, r=10, t=10, b=10))
                 st.plotly_chart(fig, use_container_width=True)
 
-# ================= TAB 5: 自選股票清單總覽 (中文產業 + 上市櫃全支援) =================
+# ================= TAB 5: 自選股票清單總覽 (修復 .split 杜絕 5309O) =================
 with tab_watchlist:
     st.subheader("📋 自選股票清單總覽儀表板 (Watchlist Overview)")
     
@@ -642,15 +641,16 @@ with tab_watchlist:
             bull_count = 0
             
             for label, ticker in watchlist_items:
-                code = ticker.replace(".TW", "").replace(".TWO", "").strip()
-                name = label.split(" (")[0]
+                # 💡 核心修復：以小數點分割，徹底杜絕 5309O 的問題！
+                code = ticker.split(".")[0].strip()
+                name = label.split(" (")[0].strip()
                 
                 # 取得產業與股本資訊
                 p_info = profiles.get(code, {})
                 ind_text = translate_industry(p_info.get("industry", "電子科技"))
                 cap_val = float(p_info.get("cap", 0.0))
                 
-                # 💡 若股本未提供，自動連線 yfinance 即時以股數反算股本 (防呆機制)
+                # 若股本未提供，自動連線 yfinance 即時以股數反算股本
                 if cap_val <= 0.0:
                     try:
                         t_obj = yf.Ticker(ticker)
@@ -743,23 +743,24 @@ with tab_watchlist:
         df_display = pd.DataFrame(overview_rows).drop(columns=['code', 'name'])
         st.dataframe(df_display, use_container_width=True, hide_index=True)
         
+        # 💡 新聞檢索傳送門（使用乾淨的純 4 碼 code）
         st.write("---")
         st.markdown("#### 📰 【自選股近半個月即時新聞與研究傳送門】")
         sel_stock = st.selectbox("選擇要查閱近半個月新聞的標的：", options=[r["標的代號"] for r in overview_rows])
         chosen_info = next((r for r in overview_rows if r["標的代號"] == sel_stock), None)
         
         if chosen_info:
-            c_code = chosen_info['code']
+            clean_c = str(chosen_info['code']).split('.')[0].strip()
             c_name = chosen_info['name']
             
             nc1, nc2, nc3 = st.columns(3)
-            nc1.markdown(f"**[📰 Yahoo 奇摩股市新聞 ({c_name})]**(https://tw.stock.yahoo.com/quote/{c_code}/news)")
+            nc1.markdown(f"**[📰 Yahoo 奇摩股市新聞 ({c_name})]**(https://tw.stock.yahoo.com/quote/{clean_c}/news)")
             nc1.caption("包含法說會、重大訊息、營收動態")
             
-            nc2.markdown(f"**[🔍 Google 財經近半月新聞彙整]**(https://www.google.com/search?q={c_name}+{c_code}+股票&tbm=nws&tbs=qdr:m)")
+            nc2.markdown(f"**[🔍 Google 財經近半月新聞彙整]**(https://www.google.com/search?q={c_name}+{clean_c}+股票&tbm=nws&tbs=qdr:m)")
             nc2.caption("自動過濾近兩週至一個月相關報導")
             
-            nc3.markdown(f"**[📊 鉅亨網法人動態與營收走勢]**(https://invest.cnyes.com/twstock/TWS/{c_code}/news)")
+            nc3.markdown(f"**[📊 鉅亨網法人動態與營收走勢]**(https://invest.cnyes.com/twstock/TWS/{clean_c}/news)")
             nc3.caption("三大法人買賣超與業績解析")
 
 # ================= TAB 4: 策略手冊與 SOP 指南 (原生卡片架構) =================
@@ -793,4 +794,3 @@ with tab_docs:
     with st.expander("💼 五、 60 萬元資金與部位管理模型 SOP", expanded=True):
         st.write("• **三槽位配置**：總資金 60 萬元切分為 3 槽位，每槽上限 20 萬元。單筆極限虧損鎖死在總資金之 1.33%。")
         st.write("• **回撤熔斷機制**：歷程回撤超 -10% 時，槽位下單預算降為 14 萬元（7 折），防禦至淨值回升至 95% 以上。")
-        
