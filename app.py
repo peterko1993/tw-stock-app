@@ -16,7 +16,7 @@ REPORT_FILE = "radar_report.json"
 POSITIONS_FILE = "positions.json"
 HISTORY_FILE = "trade_history.csv"
 
-# 預設自選標的池（涵蓋 20~150 億旗艦股）
+# 經典預設自選標的池（涵蓋 20~150 億旗艦股）
 DEFAULT_STOCKS = {
     "台積電 (2330)": "2330.TW", "聯發科 (2454)": "2454.TW",
     "欣興 (3037)": "3037.TW", "奇鋐 (3017)": "3017.TW",
@@ -84,6 +84,37 @@ def get_twii_market_status():
     except Exception: pass
     return True, 0, 0
 
+# 💡 官方企業輪廓資料庫快取（自動對應類股與資本額）
+@st.cache_data(ttl=86400)
+def get_company_profiles():
+    known_profiles = {
+        "2330": {"industry": "半導體業", "cap": 2593.2},
+        "2454": {"industry": "半導體業", "cap": 160.2},
+        "3037": {"industry": "電子零組件業", "cap": 153.0},
+        "3017": {"industry": "電腦及週邊設備業", "cap": 38.8},
+        "3324": {"industry": "電腦及週邊設備業", "cap": 8.8},
+        "6274": {"industry": "電子零組件業", "cap": 27.2},
+        "2345": {"industry": "通信網路業", "cap": 56.4},
+        "2368": {"industry": "電子零組件業", "cap": 49.3},
+        "4915": {"industry": "電腦及週邊設備業", "cap": 45.6}
+    }
+    try:
+        url_l = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
+        res = requests.get(url_l, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
+        if res.status_code == 200:
+            for item in res.json():
+                code = item.get("公司代號", "").strip()
+                ind = item.get("產業別", "")
+                cap_s = float(item.get("實收資本額", 0)) / 100_000_000
+                if code:
+                    known_profiles[code] = {
+                        "industry": ind if ind else "上市企業",
+                        "cap": round(cap_s, 1)
+                    }
+    except Exception:
+        pass
+    return known_profiles
+
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = load_json(WATCHLIST_FILE, DEFAULT_STOCKS)
 
@@ -132,7 +163,6 @@ with st.sidebar:
         st.success("已還原預設自選清單！")
         st.rerun()
 
-# 頂部大盤環境狀態
 st.title("📈 短線成長股・量縮深蹲指示器 V2.0")
 is_bull, twii_c, twii_ma = get_twii_market_status()
 if is_bull:
@@ -140,15 +170,17 @@ if is_bull:
 else:
     st.warning(f"🟡 **大盤月線反壓中**（加權指數：{twii_c:,.0f} 點 低於月線 {twii_ma:,.0f} 點），建議空手或將部位打折！")
 
-tab_radar, tab_tracker, tab_batch, tab_single, tab_docs = st.tabs([
+# 頁面六大分頁標籤（含全新 TAB 5）
+tab_radar, tab_tracker, tab_batch, tab_single, tab_watchlist, tab_docs = st.tabs([
     "📡 今日雷達獵股戰報",
     "📊 實盤追蹤與績效帳本 (方案B)",
     "🚀 自選名單批次體檢", 
     "🔍 個股深入技術體檢", 
+    "📋 自選股票清單總覽 (TAB 5)",
     "📖 策略手冊與 SOP 指南"
 ])
 
-# ================= TAB 0: 每日雷達戰報 =================
+# ================= TAB 0: 每日雷達戰報 (含類股、規模與新聞) =================
 with tab_radar:
     st.subheader("📡 全自動獵股雷達・今日盤後戰報")
     report = load_json(REPORT_FILE, {})
@@ -169,11 +201,18 @@ with tab_radar:
             st.success(f"🎯 **【今日焦點】：共發現 {len(squat_stocks)} 檔精準符合「量縮深蹲」進場門檻！**")
             for s in squat_stocks:
                 with st.container():
-                    c1, c2, c3, c4 = st.columns([2, 2, 2, 2])
+                    c1, c2, c3, c4 = st.columns([2.2, 1.8, 2.0, 2.0])
                     c1.markdown(f"### **{s['name']} ({s['code']})**")
-                    c1.caption(f"最新收盤：${s['close']} ｜ 支撐：{s['support']} ｜ 股本：{s['cap']}億")
-                    c2.write(f"• 投信買超：`+{s['trust_buy']}` 張 ｜ 營收 YoY：`+{s['rev_yoy']}%`")
-                    c3.write(f"• 建議掛單區間：`\({s['buy_min']} ~\){s['buy_max']}` ｜ 停損：`${s['stop_loss']}`")
+                    c1.caption(f"最新收盤：${s['close']} ｜ 踩中：**{s['support']}**")
+                    c1.write(f"🏷️ **類股**：`{s.get('industry', '電子科技')}`")
+                    c1.write(f"🏢 **規模**：`{s.get('cap_bracket', str(s.get('cap', '')) + '億')}`")
+                    
+                    c2.write(f"• **投信買超**：`+{s['trust_buy']}` 張")
+                    c2.write(f"• **營收 YoY**：`+{s['rev_yoy']}%`")
+                    
+                    c3.write(f"• **建議區間**：`\({s['buy_min']} ~\){s['buy_max']}`")
+                    c3.write(f"• **硬停損**：`${s['stop_loss']}`")
+                    c3.write(f"• **目標價 (+8%)**：`${s['take_profit']}`")
                     
                     label_key = f"{s['name']} ({s['code']})"
                     if label_key not in st.session_state.watchlist:
@@ -184,6 +223,13 @@ with tab_radar:
                             st.rerun()
                     else:
                         c4.write("✅ 已在自選觀察清單中")
+                        
+                    # 💡 近半個月新聞與產業速查
+                    with st.expander(f"📰 查看 {s['name']} 近半個月新聞與產業速查", expanded=False):
+                        n1, n2, n3 = st.columns(3)
+                        n1.markdown(f"[📰 Yahoo 奇摩個股新聞]({s.get('yahoo_news', f'https://tw.stock.yahoo.com/quote/{s[\"code\"]}/news')})")
+                        n2.markdown(f"[🔍 Google 財經近半月新聞]({s.get('google_news', f'https://www.google.com/search?q={s[\"name\"]}+{s[\"code\"]}+股票&tbm=nws&tbs=qdr:m')})")
+                        n3.markdown(f"[📊 鉅亨網法人與重大訊息]({s.get('cnyes_news', f'https://invest.cnyes.com/twstock/TWS/{s[\"code\"]}/news')})")
                 st.divider()
         else:
             st.info("⏸ 今日籌碼與基本面強勢股尚未剛好踩在均線深蹲點，建議維持觀望。")
@@ -456,6 +502,145 @@ with tab_single:
                 fig.update_layout(xaxis_rangeslider_visible=False, height=420, margin=dict(l=10, r=10, t=10, b=10))
                 st.plotly_chart(fig, use_container_width=True)
 
+# ================= TAB 5: 自選股票清單總覽 (全新功能) =================
+with tab_watchlist:
+    st.subheader("📋 自選股票清單總覽儀表板 (Watchlist Overview)")
+    
+    profiles = get_company_profiles()
+    watchlist_items = list(st.session_state.watchlist.items())
+    
+    if not watchlist_items:
+        st.info("目前自選清單為空，可由側邊欄或雷達戰報加入股票。")
+    else:
+        with st.spinner("正在取得自選股即時產業、規模與行情指標..."):
+            tickers = [t for _, t in watchlist_items]
+            try:
+                df_all = yf.download(tickers, period="2mo", interval="1d", progress=False)
+            except Exception:
+                df_all = pd.DataFrame()
+
+            overview_rows = []
+            bull_count = 0
+            
+            for label, ticker in watchlist_items:
+                code = ticker.replace(".TW", "").replace(".TWO", "").strip()
+                name = label.split(" (")[0]
+                
+                # 類股與股本資料
+                p_info = profiles.get(code, {"industry": "電子科技", "cap": 0.0})
+                ind = p_info["industry"]
+                cap_val = p_info["cap"]
+                
+                if cap_val <= 0:
+                    cap_bracket_label = "未提供"
+                elif cap_val < 20.0:
+                    cap_bracket_label = f"{cap_val:.1f}億 (小型爆發股)"
+                elif cap_val <= 60.0:
+                    cap_bracket_label = f"{cap_val:.1f}億 (中型成長股)"
+                elif cap_val <= 150.0:
+                    cap_bracket_label = f"{cap_val:.1f}億 (旗艦領頭羊)"
+                else:
+                    cap_bracket_label = f"{cap_val:.1f}億 (大型權值股)"
+
+                # 行情運算
+                sub_df = None
+                try:
+                    if not df_all.empty:
+                        if isinstance(df_all.columns, pd.MultiIndex):
+                            sub_df = df_all.xs(ticker, axis=1, level=1).dropna(how='all')
+                        else:
+                            sub_df = df_all.dropna(how='all')
+                except Exception:
+                    sub_df = None
+
+                if sub_df is not None and len(sub_df) >= 20:
+                    c_today = float(sub_df['Close'].iloc[-1])
+                    c_prev = float(sub_df['Close'].iloc[-2])
+                    change_pct = ((c_today - c_prev) / c_prev) * 100
+                    
+                    ma20 = float(sub_df['Close'].rolling(20).mean().iloc[-1])
+                    ma10 = float(sub_df['Close'].rolling(10).mean().iloc[-1])
+                    vol = float(sub_df['Volume'].iloc[-1])
+                    vol_ma5 = float(sub_df['Volume'].rolling(5).mean().iloc[-1])
+                    
+                    # 20MA 多空位階
+                    dist_ma20 = ((c_today - ma20) / ma20) * 100
+                    if c_today >= ma20:
+                        mkt_pos = f"🟢 站上 (+{dist_ma20:.1f}%)"
+                        bull_count += 1
+                    else:
+                        mkt_pos = f"🔴 跌破 ({dist_ma20:.1f}%)"
+                        
+                    # 量能萎縮比
+                    vol_ratio = vol / vol_ma5 if vol_ma5 > 0 else 1.0
+                    if vol_ratio <= 0.7:
+                        vol_tag = f"🧊 量縮 ({vol_ratio:.2f}x)"
+                    elif vol_ratio >= 1.5:
+                        vol_tag = f"🔥 出量 ({vol_ratio:.2f}x)"
+                    else:
+                        vol_tag = f"⚪ 常態 ({vol_ratio:.2f}x)"
+
+                    # 深蹲狀態
+                    low = float(sub_df['Low'].iloc[-1])
+                    if (low <= ma10 * 1.018 and c_today >= ma10 * 0.99) and vol < vol_ma5:
+                        squat_tag = "🎯 均線量縮深蹲"
+                    elif abs(c_today - ma10) / ma10 <= 0.025:
+                        squat_tag = "⏳ 回測均線中"
+                    elif c_today > ma10:
+                        squat_tag = "🚀 均線上強勢"
+                    else:
+                        squat_tag = "🔻 均線反壓整理"
+                else:
+                    c_today, change_pct = 0.0, 0.0
+                    mkt_pos, vol_tag, squat_tag = "無資料", "無資料", "無資料"
+
+                overview_rows.append({
+                    "標的代號": label,
+                    "產業類別": ind,
+                    "股本規模區間": cap_bracket_label,
+                    "最新收盤價": f"${c_today:,.1f}" if c_today > 0 else "無資料",
+                    "今日漲跌%": f"{change_pct:+.2f}%" if c_today > 0 else "-",
+                    "20MA月線位階": mkt_pos,
+                    "量能萎縮比 (vs 5MV)": vol_tag,
+                    "深蹲就緒度": squat_tag,
+                    "code": code,
+                    "name": name
+                })
+
+        # 頂部戰情指標卡
+        c_ov1, c_ov2, c_ov3 = st.columns(3)
+        c_ov1.metric("自選監控總數", f"{len(overview_rows)} 檔")
+        bull_pct = (bull_count / len(overview_rows) * 100) if overview_rows else 0
+        c_ov2.metric("多頭站穩月線比例", f"{bull_pct:.0f} %")
+        squat_ready_count = len([r for r in overview_rows if "🎯" in r["深蹲就緒度"]])
+        c_ov3.metric("🎯 處於量縮深蹲點", f"{squat_ready_count} 檔")
+
+        st.write("---")
+        
+        # 1. 核心儀表板總覽表格
+        df_display = pd.DataFrame(overview_rows).drop(columns=['code', 'name'])
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
+        
+        # 2. 近半個月新聞與個股快速檢索
+        st.write("---")
+        st.markdown("#### 📰 【自選股近半個月即時新聞與研究傳送門】")
+        sel_stock = st.selectbox("選擇要查閱近半個月新聞的標的：", options=[r["標的代號"] for r in overview_rows])
+        chosen_info = next((r for r in overview_rows if r["標的代號"] == sel_stock), None)
+        
+        if chosen_info:
+            c_code = chosen_info['code']
+            c_name = chosen_info['name']
+            
+            nc1, nc2, nc3 = st.columns(3)
+            nc1.markdown(f"**[📰 Yahoo 奇摩股市新聞 ({c_name})]**(https://tw.stock.yahoo.com/quote/{c_code}/news)")
+            nc1.caption("包含法說會、重大訊息、營收動態")
+            
+            nc2.markdown(f"**[🔍 Google 財經近半月新聞彙整]**(https://www.google.com/search?q={c_name}+{c_code}+股票&tbm=nws&tbs=qdr:m)")
+            nc2.caption("自動過濾近兩週至一個月相關報導")
+            
+            nc3.markdown(f"**[📊 鉅亨網法人動態與營收走勢]**(https://invest.cnyes.com/twstock/TWS/{c_code}/news)")
+            nc3.caption("三大法人買賣超與業績解析")
+
 # ================= TAB 4: 策略手冊與 SOP 指南 (原生卡片架構，絕不溢出) =================
 with tab_docs:
     st.subheader("📖 短線成長股・量縮深蹲 (Squat & Rebound) 全流程作戰手冊 V2.0")
@@ -463,7 +648,7 @@ with tab_docs:
 
     with st.expander("🔍 一、 盤後全自動獵股漏斗 SOP（3 → 1 → 2 順序過濾）", expanded=True):
         st.write("• **步驟 3【籌碼鎖定度與階梯門檻】**：最新日投信買超 >= 50 張；若股本在 60 億~150 億，門檻提高至 >= 250 張。")
-        st.write("• **步驟 1【放寬股本規模 (20億 ~ 150億)】**：鎖定 20-60 億中型成長股與 60-150 億旗艦領頭羊（如欣興、技嘉），排除 > 150 億權值牛皮股。")
+        st.write("• **步驟 1【放寬股本規模 (20億 ~ 150億)】**：鎖定 20~60 億中型成長股與 60~150 億旗艦領頭羊（如欣興、技嘉），排除 > 150 億權值牛皮股。")
         st.write("• **步驟 2【業績加速動能】**：最新公告單月營收年增率 YoY > 20%，具實質基本面保護。")
 
     with st.expander("🧘 二、 盤後「量縮深蹲 (Squat)」技術面檢驗 SOP", expanded=True):
