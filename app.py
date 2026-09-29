@@ -13,13 +13,11 @@ REPORT_FILE = "radar_report.json"
 POSITIONS_FILE = "positions.json"
 HISTORY_FILE = "trade_history.csv"
 
-# 💡 你可以在此處直接加入想「永久固定」的自選股（無論雲端怎麼休眠重開都絕不丟失）
 DEFAULT_STOCKS = {
     "台積電 (2330)": "2330.TW", "聯發科 (2454)": "2454.TW",
     "欣興 (3037)": "3037.TW", "奇鋐 (3017)": "3017.TW",
     "雙鴻 (3324)": "3324.TWO", "台燿 (6274)": "6274.TWO",
-    "智邦 (2345)": "2345.TW", "金像電 (2368)": "2368.TW",
-    "盟立 (2464)": "2464.TW"
+    "智邦 (2345)": "2345.TW", "金像電 (2368)": "2368.TW"
 }
 
 def load_json(filepath, default):
@@ -87,32 +85,12 @@ with st.sidebar:
                 st.success(f"已移除：{del_target}")
                 st.rerun()
 
-    with st.expander("💾 名單備份與還原", expanded=False):
-        st.download_button(
-            label="📥 匯出下載自選清單 (JSON)",
-            data=json.dumps(st.session_state.watchlist, ensure_ascii=False, indent=2),
-            file_name="my_watchlist.json",
-            mime="application/json",
-            use_container_width=True
-        )
-        uploaded_file = st.file_uploader("📤 上傳還原自選清單", type="json")
-        if uploaded_file is not None:
-            try:
-                loaded = json.load(uploaded_file)
-                st.session_state.watchlist = loaded
-                save_json(WATCHLIST_FILE, loaded)
-                st.success("名單還原成功！")
-                st.rerun()
-            except Exception as e:
-                st.error("檔案格式有誤。")
-
     if st.button("🔄 恢復初始預設名單", use_container_width=True):
         st.session_state.watchlist = DEFAULT_STOCKS.copy()
         save_json(WATCHLIST_FILE, st.session_state.watchlist)
         st.success("已還原預設自選清單！")
         st.rerun()
 
-# 頂部大盤環境狀態
 st.title("📈 短線成長股・量縮深蹲指示器 V2.0")
 is_bull, twii_c, twii_ma = get_twii_market_status()
 if is_bull:
@@ -168,7 +146,7 @@ with tab_radar:
         else:
             st.info("⏸ 今日籌碼與基本面強勢股尚未剛好踩在均線深蹲點，建議維持觀望。")
 
-# ================= TAB 1: 實盤追蹤與績效帳本 (核心升級價位顯示) =================
+# ================= TAB 1: 實盤追蹤與績效帳本 (全新關鍵價位面板) =================
 with tab_tracker:
     st.subheader("📊 方案 B：前向實盤追蹤流水帳本 (Forward-Walk Paper Trading)")
     
@@ -192,39 +170,40 @@ with tab_tracker:
     m5.metric("平均持股天數", f"{avg_days:.1f} 天")
     st.divider()
 
-    st.markdown("#### 🏦 【當前持倉部位即時監控（含 SOP 決策價位）】")
+    st.markdown("#### 🏦 【當前持倉部位即時監控・實戰下單指標】")
     if positions:
         pos_display = []
         for p in positions:
             entry_p = float(p['entry_price'])
+            curr_p = float(p.get('curr_price', entry_p))
+            unreal_pct = float(p.get('unrealized_pct', 0.0))
+            days = p.get('days_held', 0)
             
-            # 若檔案中無價位欄位則動態計算防呆
-            sl_val = float(p.get('stop_loss_p', round(entry_p * 0.96, 1)))
-            be_target_val = float(p.get('be_target_p', round(entry_p * 1.04, 1)))
-            tp_val = float(p.get('tp_stage1_p', round(entry_p * 1.08, 1)))
-            
-            # 停損價動態判斷：若已激活保本，則標註保本價
-            if p.get('is_breakeven'):
-                curr_sl_display = f"${entry_p * 1.002:.1f} (保本已啟動)"
-                status_text = "🛡️ 保本防禦中"
+            # 動態停損價位顯示
+            if p.get('is_breakeven') and days > 1:
+                stop_display = f"🛡️ ${entry_p * 1.002:.1f} (保本線)"
             else:
-                curr_sl_display = f"${sl_val:.1f} (-4%)"
-                status_text = "👀 持倉中"
-
+                stop_display = f"🛑 ${entry_p * 0.96:.1f} (-4%)"
+                
+            # 階段一停利價位顯示
             if p.get('lot_a_sold'):
-                status_text = "🎯 半倉+8%落袋，其餘守10MA"
+                tp1_display = "✅ 半倉已停利"
+            else:
+                tp1_display = f"🎯 ${entry_p * 1.08:.1f} (+8%)"
+                
+            # 移動停利 10MA 顯示
+            ma10_val = p.get('ma10')
+            ma10_display = f"🏄 ${ma10_val:.1f}" if ma10_val else "計算中"
 
             pos_display.append({
                 "標的": f"{p['name']} ({p['code']})",
-                "進場日": p['entry_date'],
+                "進場日 (天數)": f"{p['entry_date']} ({days}天)",
                 "進場成本": f"${entry_p:.1f}",
-                "最新現價": f"${p.get('curr_price', entry_p):.1f}",
-                "未實現損益": f"{p.get('unrealized_pct', 0.0):+.2f}%",
-                "🛑 當前防守停損": curr_sl_display,
-                "🛡️ 保本啟動點 (+4%)": f"${be_target_val:.1f}",
-                "🎯 階段一停利 (+8%)": f"${tp_val:.1f}",
-                "已持有": f"{p['days_held']} 天",
-                "當前狀態": status_text
+                "現價 (浮盈%)": f"${curr_p:.1f} ({unreal_pct:+.2f}%)",
+                "🛑 當前防守停損": stop_display,
+                "🎯 階段一停利": tp1_display,
+                "🏄 移動停利 (10MA)": ma10_display,
+                "持倉狀態": "半倉續抱守10MA" if p.get('lot_a_sold') else ("保本防護中" if p.get('is_breakeven') else "持倉中")
             })
         st.dataframe(pd.DataFrame(pos_display), use_container_width=True, hide_index=True)
         
@@ -243,7 +222,6 @@ with tab_tracker:
     st.markdown("#### 📋 【歷史結案明細表】")
     if not df_history.empty:
         st.dataframe(df_history, use_container_width=True, hide_index=True)
-        
         st.markdown("#### 📈 【實盤績效視覺化儀表板】")
         fig = make_subplots(
             rows=2, cols=2,
@@ -435,28 +413,41 @@ with tab_docs:
 
 ---
 ### 🔍 一、 盤後全自動獵股漏斗 SOP（3 → 1 → 2 順序過濾）
-* 📡 **步驟 3【籌碼鎖定度】**：最新日投信買超 $\ge 50$ 張，或**近 5 日累計買超 $\ge 100$ 張**。
-* 🏢 **步驟 1【股本輕巧度】**：實收資本額介於 **20 億元 ～ 60 億元台幣** 之間。
-* 📈 **步驟 2【業績加速動能】**：最新單月營收年增率 **YoY > 20%**。
+每日 16:30 證交所盤後總表出爐後，雷達依序執行三道嚴格過濾，全台股 1,800 檔通常僅留存 5～12 檔：
+
+* 📡 **步驟 3【籌碼鎖定度】**：
+  * **門檻**：最新交易日投信買超 $\ge 50$ 張，或**近 5 個交易日內投信累計買超 $\ge 100$ 張**。
+  * **原理**：法人籌碼具延續性。鎖定法人已大舉進駐、籌碼沉澱且成本相近之標的，排除無主力照應之冷門股。
+* 🏢 **步驟 1【股本輕巧度】**：
+  * **門檻**：實收資本額介於 **20 億元 ～ 60 億元台幣** 之間（優先鎖定半導體、AI 供應鏈、電子零組件等科技成長股）。
+  * **原理**：大型權值股推升需龐大資金，爆發力差；小型股易被操弄。20～60 億為法人推升勝率與爆發力之黃金區間。
+* 📈 **步驟 2【業績加速動能】**：
+  * **門檻**：最新公告之單月營收年增率 **YoY > 20%**，具實質業績保護。
+  * **原理**：無基本面題材炒作股回檔多為假突破；雙位數成長股回踩均線具實質買盤承接。
 
 ---
 ### 🧘 二、 盤後「量縮深蹲 (Squat)」技術面檢驗 SOP
-* 📐 **條件 1【均線多頭姿態】**：收盤價呈現 **5MA > 10MA > 20MA** 且月線向上。
-* 🎯 **條件 2【均線精確回踩】**：最低價回測 10MA 或 20MA 緩衝區（`Low <= MA * 1.018`），收盤守住。
-* 🧊 **條件 3【極致成交窒息量】**：成交量同時低於 **5 日均量（5MV）** 與 **20 日均量（20MV）**。
-* 🕯️ **條件 4【K 棒實體收斂】**：K 棒實體振幅 **$\le 3.5\%$**，禁止長黑實體。
+* 📐 **條件 1【均線多頭排列】**：收盤價位於多頭架構，即 **5MA > 10MA > 20MA**，且 20 日均線（月線）斜率向上。
+* 🎯 **條件 2【均線精確回踩】**：當日最低價回測 10MA 或 20MA 緩衝區（`Low <= MA * 1.018`），且收盤未實質跌破（`Close >= MA * 0.99`）。
+* 🧊 **條件 3【極致成交窒息量】**：當日成交量同時低於 **5 日均量（5MV）** 與 **20 日均量（20MV）**，代表浮額洗淨、賣壓竭盡。
+* 🕯️ **條件 4【K 棒實體收斂】**：當日 K 棒實體振幅 **$\le 3.5\%$**，禁止長黑實體。
 
 ---
 ### 🏹 三、 盤中「右側確認」掛單進場 SOP
-* 🚦 **前置大盤濾網**：加權指數收盤必須站穩 **20MA（月線）之上**，月線反壓下全市場雷達強制休眠。
-* 🎯 **次日右側過高確認**：次日**盤中最高價突破深蹲日最高點（`High_{t+1} >= High_t`）**才准建倉。
+* 🚦 **大盤多頭濾網**：加權指數收盤必須站穩 **20MA（月線）之上**。若大盤處於月線反壓，全市場雷達強制休眠，**嚴格禁止開新倉**。
+* 🎯 **次日右側過高確認**：訊號成立次日，**盤中最高價突破深蹲日最高點**才准掛單進場；若未突破視為轉折失敗，**一律放棄建倉**。
 
 ---
 ### 🛑 四、 嚴格五大出場紀律 SOP
-* 🛑 **防線 1【硬停損線 (-4.0%)】**：跌破成本價之 -4.0%，次日無條件市價出清。
-* ⏳ **防線 2【時間停損 (4天)】**：持有滿 4 天未獲利達標且無動能，第 5 天平手換股。
-* 🛡️ **防線 3【動態保本機制 (+4.0%)】**：盤中浮盈達 +4.0% 時，次日起停損線調升至成本線 (+0.2%)。
-* 🎯 **防線 4【第一階段停利 (+8.0%)】**：觸及 +8.0% 時掛單賣出 **部位 A（50% 股數）** 鎖住勝果。
-* 🏄 **防線 5【第二階段波段落袋 (破 10MA)】**：剩餘部位 B 守 10MA，**收盤跌破 10MA 次日開盤全出**。
-* ❄️ **防線 6【停損冷卻機制】**：若打到硬停損出場，**7 個交易日內禁止重複買進同一檔股票**。
+* 🛑 **防線 1【硬停損線 (-4.0%)】**：跌破成本價之 **-4.0%**，無條件市價全數砍單。
+* ⏳ **防線 2【時間停損 (4天)】**：持有滿 **4 天** 漲幅未達 +3%，**第 5 天開盤平手換股**。
+* 🛡️ **防線 3【動態保本機制 (+4.0%)】**：盤中浮盈達 **+4.0%** 時，次日起停損防線調升至 **成本價 (+0.2%)**，徹底消滅賺變賠。
+* 🎯 **防線 4【第一階段停利 (+8.0%)】**：觸及成本價 **+8.0%** 時，掛單賣出 **部位 A（50% 股數）** 鎖住勝果。
+* 🏄 **防線 5【第二階段波段落袋 (破 10MA)】**：剩餘部位 B 只要收盤跌破 10MA，**次日開盤市價全數出清**。
+* ❄️ **防線 6【停損冷卻機制】**：若觸發硬停損，**7～10 個交易日內禁止重複買進同一檔股票**。
+
+---
+### 💼 五、 60 萬元資金與部位管理模型 SOP
+* 🏦 **三槽位配置**：總資金 60 萬元切分為 **3 槽位，每槽上限 20 萬元**。單筆極限虧損鎖死在總資金之 **1.33%**。
+* 🛡️ **回撤熔斷機制**：歷程回撤超 **-10%** 時，槽位下單預算降為 **14 萬元（7 折）**，防禦至淨值回升至 95% 以上。
     """)
