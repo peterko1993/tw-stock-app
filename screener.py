@@ -35,34 +35,34 @@ def run_screener():
         print("❌ 無法取得法人日報，終止執行。")
         return
 
-    # ================= 步驟 3：籌碼基礎過濾 =================
+    # 步驟 3：籌碼基礎過濾
     df_t86 = df_t86[df_t86['證券代號'].str.match(r'^\d{4}$')]
     trust_col = [c for c in df_t86.columns if "投信" in c and "買賣超" in c][0]
     df_t86['投信買賣超張數'] = df_t86[trust_col].str.replace(',', '').astype(float) / 1000
-    
-    # 初篩：投信單日買超 >= 50 張之潛力標的
     df_step3 = df_t86[df_t86['投信買賣超張數'] >= 50][['證券代號', '證券名稱', '投信買賣超張數']].copy()
-    print(f"   步驟 3 完成：投信買超 >= 50 張共 {len(df_step3)} 檔")
 
-    # ================= 步驟 1：股本放寬至 20~150 億 + 階梯式籌碼過濾 =================
-    print("📡 [2/4] 比對股本規模 (20億 ~ 150億) 並實施階梯籌碼篩選...")
+    # 步驟 1：比對股本規模 (20~150 億) 並提取官方產業別
+    print("📡 [2/4] 比對股本規模 (20億 ~ 150億) 並提取官方產業類別...")
     url_cap = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
     res_cap = requests.get(url_cap, headers=headers, timeout=10)
-    df_cap = pd.DataFrame(res_cap.json())[['公司代號', '實收資本額']].copy()
-    df_cap['股本(億)'] = pd.to_numeric(df_cap['實收資本額'], errors='coerce') / 100_000_000
+    df_cap_raw = pd.DataFrame(res_cap.json())
     
+    cap_cols = ['公司代號', '實收資本額']
+    if '產業別' in df_cap_raw.columns:
+        cap_cols.append('產業別')
+    df_cap = df_cap_raw[cap_cols].copy()
+    if '產業別' not in df_cap.columns:
+        df_cap['產業別'] = "電子科技"
+
+    df_cap['股本(億)'] = pd.to_numeric(df_cap['實收資本額'], errors='coerce') / 100_000_000
     df_step1 = pd.merge(df_step3, df_cap, left_on='證券代號', right_on='公司代號', how='inner')
     
-    # 💡 核心進化：階梯式過濾
-    # 條件 A：中型成長股 (20億~60億)，投信單日買超 >= 50 張
+    # 階梯式過濾：20~60 億投信 >= 50 張；60~150 億投信門檻提高至 >= 250 張
     cond_mid = (df_step1['股本(億)'] >= 20.0) & (df_step1['股本(億)'] <= 60.0) & (df_step1['投信買賣超張數'] >= 50)
-    # 條件 B：大中型動能股 (60億~150億)，投信買超門檻提高至 >= 250 張（鎖定真正被重押的族群指標）
     cond_large = (df_step1['股本(億)'] > 60.0) & (df_step1['股本(億)'] <= 150.0) & (df_step1['投信買賣超張數'] >= 250)
-    
     df_step1 = df_step1[cond_mid | cond_large].copy()
-    print(f"   步驟 1 完成：符合階梯股本與法人規模共 {len(df_step1)} 檔")
 
-    # ================= 步驟 2：單月營收年增率 (YoY > 20%) =================
+    # 步驟 2：比對最新月營收 (YoY > 20%)
     print("📡 [3/4] 比對最新月營收 (YoY > 20%)...")
     url_rev = "https://openapi.twse.com.tw/v1/opendata/t187ap05_L"
     res_rev = requests.get(url_rev, headers=headers, timeout=10)
@@ -76,7 +76,6 @@ def run_screener():
 
     print(f"🎯 3-1-2 漏斗精選出 {len(df_funnel)} 檔強勢標的，開始技術面深蹲比對...")
 
-    # ================= 技術面量縮深蹲檢驗 =================
     report_items = []
     total_squat_count = 0
 
@@ -120,13 +119,28 @@ def run_screener():
             is_squat = cond_trend and cond_support and cond_vol and cond_k
             if is_squat: total_squat_count += 1
 
+            cap_val = round(float(row['股本(億)']), 1)
+            cap_bracket_label = f"{cap_val}億 (中型成長股)" if cap_val <= 60.0 else f"{cap_val}億 (旗艦領頭羊)"
+
             item_data = {
-                "name": name, "code": code, "ticker": ticker,
-                "close": round(close, 1), "trust_buy": int(row['投信買賣超張數']),
-                "cap": round(float(row['股本(億)']), 1), "rev_yoy": round(float(row['營收YoY(%)']), 1),
-                "is_squat": bool(is_squat), "support": support_name,
-                "buy_min": round(target_ma, 1), "buy_max": round(close, 1),
-                "stop_loss": round(target_ma * 0.96, 1), "take_profit": round(close * 1.08, 1)
+                "name": name,
+                "code": code,
+                "ticker": ticker,
+                "industry": str(row.get('產業別', '電子科技')),
+                "cap": cap_val,
+                "cap_bracket": cap_bracket_label,
+                "close": round(close, 1),
+                "trust_buy": int(row['投信買賣超張數']),
+                "rev_yoy": round(float(row['營收YoY(%)']), 1),
+                "is_squat": bool(is_squat),
+                "support": support_name,
+                "buy_min": round(target_ma, 1),
+                "buy_max": round(close, 1),
+                "stop_loss": round(target_ma * 0.96, 1),
+                "take_profit": round(close * 1.08, 1),
+                "yahoo_news": f"https://tw.stock.yahoo.com/quote/{code}/news",
+                "google_news": f"https://www.google.com/search?q={name}+{code}+股票&tbm=nws&tbs=qdr:m",
+                "cnyes_news": f"https://invest.cnyes.com/twstock/TWS/{code}/news"
             }
             report_items.append(item_data)
         except Exception:
