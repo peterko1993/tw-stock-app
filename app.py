@@ -16,7 +16,9 @@ REPORT_FILE = "radar_report.json"
 POSITIONS_FILE = "positions.json"
 HISTORY_FILE = "trade_history.csv"
 
-# 經典預設自選標的池（涵蓋 20~150 億旗艦股）
+FEE_RATE = 0.001425 * 0.5
+TAX_RATE = 0.003
+
 DEFAULT_STOCKS = {
     "台積電 (2330)": "2330.TW", "聯發科 (2454)": "2454.TW",
     "欣興 (3037)": "3037.TW", "奇鋐 (3017)": "3017.TW",
@@ -25,7 +27,6 @@ DEFAULT_STOCKS = {
     "致伸 (4915)": "4915.TW", "系統電 (5309)": "5309.TWO"
 }
 
-# 官方台股產業代碼對照表（徹底將數字代碼轉為中文）
 TW_INDUSTRY_MAP = {
     "01": "水泥工業", "02": "食品工業", "03": "塑膠工業", "04": "紡織纖維",
     "05": "電機機械", "06": "電器電纜", "07": "化學生技", "08": "玻璃陶瓷",
@@ -54,18 +55,9 @@ def load_json(filepath, default):
         with open(filepath, "r", encoding="utf-8") as f: return json.load(f)
     except Exception: return default
 
-def save_json(filepath, data):
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-        
-    has_secrets = False
-    try:
-        if "GITHUB_TOKEN" in st.secrets and "GITHUB_REPO" in st.secrets:
-            has_secrets = True
-    except Exception:
-        has_secrets = False
-
-    if has_secrets:
+# 💡 通用 GitHub 反向同步函式 (支援 JSON 與 CSV 歷史帳本)
+def push_file_to_github(filepath, content_bytes):
+    if "GITHUB_TOKEN" in st.secrets and "GITHUB_REPO" in st.secrets:
         try:
             token = st.secrets["GITHUB_TOKEN"]
             repo = st.secrets["GITHUB_REPO"]
@@ -76,22 +68,26 @@ def save_json(filepath, data):
             }
             get_res = requests.get(url, headers=headers)
             sha = get_res.json().get("sha") if get_res.status_code == 200 else None
-            
-            json_str = json.dumps(data, ensure_ascii=False, indent=2)
-            content_b64 = base64.b64encode(json_str.encode("utf-8")).decode("utf-8")
-            
+            content_b64 = base64.b64encode(content_bytes).decode("utf-8")
             payload = {
                 "message": f"🤖 [Streamlit] 使用者反向更新 {filepath}",
                 "content": content_b64
             }
             if sha:
                 payload["sha"] = sha
-                
-            put_res = requests.put(url, headers=headers, json=payload)
-            if put_res.status_code in [200, 201]:
-                print(f"✅ 成功反向更新 {filepath} 至 GitHub！")
+            requests.put(url, headers=headers, json=payload)
         except Exception as e:
-            print(f"⚠️ 反向更新例外異常: {e}")
+            print(f"⚠️ 反向更新 {filepath} 異常: {e}")
+
+def save_json(filepath, data):
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    push_file_to_github(filepath, json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"))
+
+def save_history_csv(df):
+    df.to_csv(HISTORY_FILE, index=False, encoding="utf-8-sig")
+    with open(HISTORY_FILE, "rb") as f:
+        push_file_to_github(HISTORY_FILE, f.read())
 
 @st.cache_data(ttl=1800)
 def get_twii_market_status():
@@ -107,7 +103,6 @@ def get_twii_market_status():
     except Exception: pass
     return True, 0, 0
 
-# 官方台股資料庫快取（上市 + 上櫃全覆蓋）
 @st.cache_data(ttl=86400)
 def get_all_taiwan_stocks():
     stocks = {
@@ -123,8 +118,6 @@ def get_all_taiwan_stocks():
         "2368": {"code": "2368", "name": "金像電", "market": ".TW", "market_name": "上市", "industry": "電子零組件業", "cap": 49.3},
         "4915": {"code": "4915", "name": "致伸", "market": ".TW", "market_name": "上市", "industry": "電子零組件業", "cap": 45.6}
     }
-    
-    # 1. 抓取證交所 (TWSE) 上市公司
     try:
         url_l = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
         res_l = requests.get(url_l, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
@@ -135,13 +128,9 @@ def get_all_taiwan_stocks():
                 ind_raw = item.get("產業別", "")
                 cap_s = float(item.get("實收資本額", 0)) / 100_000_000
                 if c and n:
-                    stocks[c] = {
-                        "code": c, "name": n, "market": ".TW", "market_name": "上市",
-                        "industry": translate_industry(ind_raw), "cap": round(cap_s, 1)
-                    }
+                    stocks[c] = {"code": c, "name": n, "market": ".TW", "market_name": "上市", "industry": translate_industry(ind_raw), "cap": round(cap_s, 1)}
     except Exception: pass
 
-    # 2. 抓取櫃買中心 (TPEx) 上櫃公司
     try:
         url_o = "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"
         res_o = requests.get(url_o, headers={"User-Agent": "Mozilla/5.0"}, timeout=6)
@@ -153,36 +142,22 @@ def get_all_taiwan_stocks():
                 cap_raw = float(item.get("PaidInCapital", 0) or item.get("實收資本額", 0))
                 cap_s = cap_raw / 100_000_000
                 if c and n:
-                    stocks[c] = {
-                        "code": c, "name": n, "market": ".TWO", "market_name": "上櫃",
-                        "industry": translate_industry(ind_raw), "cap": round(cap_s, 1)
-                    }
+                    stocks[c] = {"code": c, "name": n, "market": ".TWO", "market_name": "上櫃", "industry": translate_industry(ind_raw), "cap": round(cap_s, 1)}
     except Exception: pass
-
     return stocks
 
-# 智慧解析輸入（支援代號或名稱擇一）
 def resolve_taiwan_stock(query):
     q = query.strip()
-    if not q:
-        return None, "請輸入欲搜尋的股票名稱或代號！"
-    
+    if not q: return None, "請輸入欲搜尋的股票名稱或代號！"
     universe = get_all_taiwan_stocks()
-    
-    if q in universe:
-        return universe[q], None
-        
+    if q in universe: return universe[q], None
     for c, s in universe.items():
-        if s['name'] == q:
-            return s, None
-            
+        if s['name'] == q: return s, None
     candidates = [s for s in universe.values() if (q in s['name']) or (q == s['code'])]
-    if len(candidates) == 1:
-        return candidates[0], None
+    if len(candidates) == 1: return candidates[0], None
     elif len(candidates) > 1:
         cand_str = "、".join([f"{c['name']} ({c['code']})" for c in candidates[:4]])
-        return None, f"找到多檔符合標的：{cand_str}，請輸入更精確的名稱或 4 碼代號！"
-        
+        return None, f"找到多檔符合標的：{cand_str}，請輸入更精確的名稱或代號！"
     if q.isdigit() or (len(q) >= 4 and q[:4].isdigit()):
         for sfx, m_name in [(".TW", "上市"), (".TWO", "上櫃")]:
             try:
@@ -192,12 +167,8 @@ def resolve_taiwan_stock(query):
                     s_name = t.info.get("shortName") or q
                     shares = t.fast_info.get("shares") or 0
                     calc_cap = round((shares * 10) / 100_000_000, 1) if shares else 0.0
-                    return {
-                        "code": q, "name": s_name, "market": sfx,
-                        "market_name": m_name, "industry": "電子科技", "cap": calc_cap
-                    }, None
+                    return {"code": q, "name": s_name, "market": sfx, "market_name": m_name, "industry": "電子科技", "cap": calc_cap}, None
             except Exception: pass
-
     return None, f"查無台股標的「{q}」，請確認名稱是否正確！"
 
 if "watchlist" not in st.session_state:
@@ -296,7 +267,7 @@ with tab_radar:
                     c2.write(f"• **投信買超**：`+{s['trust_buy']}` 張")
                     c2.write(f"• **營收 YoY**：`+{s['rev_yoy']}%`")
                     
-                    c3.write(f"• **建議區間**：`\({s['buy_min']} ~\){s['buy_max']}`")
+                    c3.write(f"• **建議區間**：`${s['buy_min']} ~ ${s['buy_max']}`")
                     c3.write(f"• **硬停損**：`${s['stop_loss']}`")
                     c3.write(f"• **目標價 (+8%)**：`${s['take_profit']}`")
                     
@@ -323,12 +294,16 @@ with tab_radar:
         else:
             st.info("⏸ 今日籌碼與基本面強勢股尚未剛好踩在均線深蹲點，建議維持觀望。")
 
-# ================= TAB 1: 實盤追蹤與績效帳本 =================
+# ================= TAB 1: 實盤追蹤與績效帳本 (核心新增手動平倉結案) =================
 with tab_tracker:
     st.subheader("📊 方案 B：前向實盤追蹤流水帳本 (Forward-Walk Paper Trading)")
     
     positions = load_json(POSITIONS_FILE, [])
-    df_history = pd.read_csv(HISTORY_FILE) if os.path.exists(HISTORY_FILE) else pd.DataFrame()
+    df_history = pd.read_csv(HISTORY_FILE) if os.path.exists(HISTORY_FILE) else pd.DataFrame(columns=[
+        "代號", "名稱", "進場日", "進場價", "出場日", "持股天數",
+        "投入金額", "回收金額", "淨損益(NTD)", "部位A_損益%", "部位B_損益%",
+        "綜合報酬率%", "出場原因"
+    ])
 
     total_trades = len(df_history)
     if total_trades > 0:
@@ -381,10 +356,81 @@ with tab_tracker:
             })
         st.dataframe(pd.DataFrame(pos_display), use_container_width=True, hide_index=True)
         
-        with st.expander("🗑️ 手動刪除未建倉或誤入之虛擬部位", expanded=False):
-            st.warning("若你在真實帳戶中並未買進該檔股票，可在此將其從虛擬帳本中剔除，以釋放槽位空間。")
-            del_pos_target = st.selectbox("選擇要刪除的在倉部位", options=[f"{p['name']} ({p['code']})" for p in positions])
-            if st.button("確認刪除此持倉紀錄", type="primary"):
+        # 💡 核心新增功能：手動平倉結案面板
+        with st.expander("🎯 手動平倉結案（自訂出場價記帳至歷史明細）", expanded=True):
+            st.info("若你已在券商帳戶實際出清該檔股票，可在此填寫賣出價，系統將自動計算損益並歸檔至歷史結案帳本！")
+            c_close1, c_close2, c_close3 = st.columns(3)
+            
+            with c_close1:
+                target_to_close = st.selectbox("選擇要結案平倉的在倉標的", options=[f"{p['name']} ({p['code']})" for p in positions], key="sel_close_pos")
+                matched_pos = next((p for p in positions if f"{p['name']} ({p['code']})" == target_to_close), None)
+            
+            with c_close2:
+                default_sell_p = float(matched_pos.get('curr_price', matched_pos['entry_price'])) if matched_pos else 100.0
+                user_exit_price = st.number_input("實際賣出成交均價 (NTD)", value=default_sell_p, step=0.1, key="in_exit_p")
+                
+            with c_close3:
+                user_exit_reason = st.selectbox("選擇結案原因", [
+                    "🎯 手動獲利了結", "🛑 手動停損離場", "⏳ 手動換股平倉", "🏆 達標全數出場", "🛡️ 手動保本出場"
+                ], key="sel_exit_reason")
+                
+            if st.button("確認結案此筆交易並寫入帳本", type="primary", use_container_width=True):
+                if matched_pos:
+                    today_str = datetime.date.today().strftime("%Y-%m-%d")
+                    e_price = float(user_exit_price)
+                    cost = float(matched_pos['total_invested'])
+                    days = int(matched_pos.get('days_held', 0))
+                    
+                    # 計算總回收金額（考量是否曾賣出過半倉）
+                    if matched_pos.get('lot_a_sold'):
+                        shares_b = matched_pos['shares_b']
+                        rev_b = shares_b * e_price * (1 - FEE_RATE - TAX_RATE)
+                        tot_rev = matched_pos['lot_a_revenue'] + rev_b
+                        pnl_b_pct = (e_price - matched_pos['entry_price']) / matched_pos['entry_price'] * 100
+                        pnl_a_pct = matched_pos['lot_a_pnl_pct']
+                    else:
+                        tot_shares = matched_pos['shares_a'] + matched_pos['shares_b']
+                        tot_rev = tot_shares * e_price * (1 - FEE_RATE - TAX_RATE)
+                        pnl_pct = (e_price - matched_pos['entry_price']) / matched_pos['entry_price'] * 100
+                        pnl_a_pct = pnl_pct
+                        pnl_b_pct = pnl_pct
+                        
+                    net_pnl = tot_rev - cost
+                    tot_roi = (net_pnl / cost) * 100
+                    
+                    # 1. 建立結案交易紀錄
+                    new_record = {
+                        "代號": matched_pos['code'],
+                        "名稱": matched_pos['name'],
+                        "進場日": matched_pos['entry_date'],
+                        "進場價": matched_pos['entry_price'],
+                        "出場日": today_str,
+                        "持股天數": days,
+                        "投入金額": int(cost),
+                        "回收金額": int(tot_rev),
+                        "淨損益(NTD)": int(net_pnl),
+                        "部位A_損益%": round(pnl_a_pct, 2),
+                        "部位B_損益%": round(pnl_b_pct, 2),
+                        "綜合報酬率%": round(tot_roi, 2),
+                        "出場原因": user_exit_reason
+                    }
+                    
+                    # 2. 寫入歷史結案 DataFrame
+                    df_history = pd.concat([df_history, pd.DataFrame([new_record])], ignore_index=True)
+                    save_history_csv(df_history)
+                    
+                    # 3. 從在倉部位移除並同步 GitHub
+                    positions = [p for p in positions if f"{p['name']} ({p['code']})" != target_to_close]
+                    save_json(POSITIONS_FILE, positions)
+                    
+                    st.success(f"✅ 已成功平倉 {target_to_close}！損益：NT$ {int(net_pnl):+,d} ({tot_roi:+.2f}%)，已歸檔至歷史明細！")
+                    st.rerun()
+
+        # 垃圾桶：僅用於刪除誤入或未建倉部位
+        with st.expander("🗑️ 手動刪除未建倉或誤入之虛擬部位 (不計入歷史損益)", expanded=False):
+            st.warning("若你在真實帳戶中並未買進該檔股票，可在此直接剔除（不會產生損益紀錄）。")
+            del_pos_target = st.selectbox("選擇要丟棄的虛擬部位", options=[f"{p['name']} ({p['code']})" for p in positions], key="sel_discard_pos")
+            if st.button("確認刪除此持倉紀錄", type="secondary"):
                 positions = [p for p in positions if f"{p['name']} ({p['code']})" != del_pos_target]
                 save_json(POSITIONS_FILE, positions)
                 st.success(f"已從帳本中刪除 {del_pos_target}！")
@@ -393,6 +439,8 @@ with tab_tracker:
         st.info("目前無在倉持股，現金池 100% 待命。")
 
     st.write("---")
+    
+    # 歷史結案明細表呈現區
     st.markdown("#### 📋 【歷史結案明細表】")
     if not df_history.empty:
         st.dataframe(df_history, use_container_width=True, hide_index=True)
@@ -422,7 +470,7 @@ with tab_tracker:
         fig.update_layout(height=650, showlegend=False, margin=dict(l=10, r=10, t=30, b=10))
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("尚無結案交易紀錄，等待排程每日 16:30 自動追蹤結算。")
+        st.info("尚無結案交易紀錄，等待排程每日 16:30 自動追蹤結算，或可使用上方「手動平倉結案」自訂出場。")
 
 # ================= TAB 2: 自選名單批次體檢 =================
 with tab_batch:
@@ -591,13 +639,12 @@ with tab_single:
                 fig.update_layout(xaxis_rangeslider_visible=False, height=420, margin=dict(l=10, r=10, t=10, b=10))
                 st.plotly_chart(fig, use_container_width=True)
 
-# ================= TAB 5: 自選股票清單總覽 (修復 .split 杜絕 5309O) =================
+# ================= TAB 5: 自選股票清單總覽 =================
 with tab_watchlist:
     st.subheader("📋 自選股票清單總覽儀表板 (Watchlist Overview)")
     
     with st.expander("⚙️ 快速管理自選名單 (在此新增 / 剔除標的)", expanded=False):
         c_add, c_del = st.columns(2)
-        
         with c_add:
             st.markdown("##### ➕ 新增標的至自選清單 (智慧二合一)")
             t5_smart_query = st.text_input("輸入股票名稱 或 4 碼代號", placeholder="例如：系統電 或 5309 或 鴻海", key="t5_smart_query")
@@ -641,35 +688,26 @@ with tab_watchlist:
             bull_count = 0
             
             for label, ticker in watchlist_items:
-                # 💡 核心修復：以小數點分割，徹底杜絕 5309O 的問題！
                 code = ticker.split(".")[0].strip()
                 name = label.split(" (")[0].strip()
                 
-                # 取得產業與股本資訊
                 p_info = profiles.get(code, {})
                 ind_text = translate_industry(p_info.get("industry", "電子科技"))
                 cap_val = float(p_info.get("cap", 0.0))
                 
-                # 若股本未提供，自動連線 yfinance 即時以股數反算股本
                 if cap_val <= 0.0:
                     try:
                         t_obj = yf.Ticker(ticker)
                         shares_out = t_obj.fast_info.get("shares") or 0
                         if shares_out:
                             cap_val = round((shares_out * 10) / 100_000_000, 1)
-                    except Exception:
-                        pass
+                    except Exception: pass
 
-                if cap_val <= 0:
-                    cap_bracket_label = "未提供"
-                elif cap_val < 20.0:
-                    cap_bracket_label = f"{cap_val:.1f}億 (小型爆發股)"
-                elif cap_val <= 60.0:
-                    cap_bracket_label = f"{cap_val:.1f}億 (中型成長股)"
-                elif cap_val <= 150.0:
-                    cap_bracket_label = f"{cap_val:.1f}億 (旗艦領頭羊)"
-                else:
-                    cap_bracket_label = f"{cap_val:.1f}億 (大型權值股)"
+                if cap_val <= 0: cap_bracket_label = "未提供"
+                elif cap_val < 20.0: cap_bracket_label = f"{cap_val:.1f}億 (小型爆發股)"
+                elif cap_val <= 60.0: cap_bracket_label = f"{cap_val:.1f}億 (中型成長股)"
+                elif cap_val <= 150.0: cap_bracket_label = f"{cap_val:.1f}億 (旗艦領頭羊)"
+                else: cap_bracket_label = f"{cap_val:.1f}億 (大型權值股)"
 
                 sub_df = None
                 try:
@@ -699,12 +737,9 @@ with tab_watchlist:
                         mkt_pos = f"🔴 跌破 ({dist_ma20:.1f}%)"
                         
                     vol_ratio = vol / vol_ma5 if vol_ma5 > 0 else 1.0
-                    if vol_ratio <= 0.7:
-                        vol_tag = f"🧊 量縮 ({vol_ratio:.2f}x)"
-                    elif vol_ratio >= 1.5:
-                        vol_tag = f"🔥 出量 ({vol_ratio:.2f}x)"
-                    else:
-                        vol_tag = f"⚪ 常態 ({vol_ratio:.2f}x)"
+                    if vol_ratio <= 0.7: vol_tag = f"🧊 量縮 ({vol_ratio:.2f}x)"
+                    elif vol_ratio >= 1.5: vol_tag = f"🔥 出量 ({vol_ratio:.2f}x)"
+                    else: vol_tag = f"⚪ 常態 ({vol_ratio:.2f}x)"
 
                     low = float(sub_df['Low'].iloc[-1])
                     if (low <= ma10 * 1.018 and c_today >= ma10 * 0.99) and vol < vol_ma5:
@@ -743,7 +778,6 @@ with tab_watchlist:
         df_display = pd.DataFrame(overview_rows).drop(columns=['code', 'name'])
         st.dataframe(df_display, use_container_width=True, hide_index=True)
         
-        # 💡 新聞檢索傳送門（使用乾淨的純 4 碼 code）
         st.write("---")
         st.markdown("#### 📰 【自選股近半個月即時新聞與研究傳送門】")
         sel_stock = st.selectbox("選擇要查閱近半個月新聞的標的：", options=[r["標的代號"] for r in overview_rows])
@@ -763,14 +797,14 @@ with tab_watchlist:
             nc3.markdown(f"**[📊 鉅亨網法人動態與營收走勢]**(https://invest.cnyes.com/twstock/TWS/{clean_c}/news)")
             nc3.caption("三大法人買賣超與業績解析")
 
-# ================= TAB 4: 策略手冊與 SOP 指南 (原生卡片架構) =================
+# ================= TAB 4: 策略手冊與 SOP 指南 =================
 with tab_docs:
     st.subheader("📖 短線成長股・量縮深蹲 (Squat & Rebound) 全流程作戰手冊 V2.0")
     st.info("💡 本系統專為「不盯盤、每日 16:30 離線決策、次日開盤智慧單自動執行」設計，具備標準作業程序（SOP）。")
 
     with st.expander("🔍 一、 盤後全自動獵股漏斗 SOP（3 → 1 → 2 順序過濾）", expanded=True):
         st.write("• **步驟 3【籌碼鎖定度與階梯門檻】**：最新日投信買超 >= 50 張；若股本在 60 億~150 億，門檻提高至 >= 250 張。")
-        st.write("• **步驟 1【放寬股本規模 (20億 ~ 150億)】**：鎖定 20~60 億中型成長股與 60~150 億旗艦領頭羊（如欣興、技嘉），排除 > 150 億權值牛皮股。")
+        st.write("• **步驟 1【放寬股本規模 (20億 ~ 150億)】**：鎖定 20 ~ 60 億中型成長股與 60 ~ 150 億旗艦領頭羊（如欣興、技嘉），排除 > 150 億權值牛皮股。")
         st.write("• **步驟 2【業績加速動能】**：最新公告單月營收年增率 YoY > 20%，具實質基本面保護。")
 
     with st.expander("🧘 二、 盤後「量縮深蹲 (Squat)」技術面檢驗 SOP", expanded=True):
