@@ -8,16 +8,16 @@
     "total_invested": 199978.38314999998,
     "shares_a": 819,
     "shares_b": 819,
-    "days_held": 2,
-    "is_breakeven": false,
+    "days_held": 3,
+    "is_breakeven": true,
     "lot_a_sold": false,
     "lot_a_revenue": 0.0,
     "lot_a_pnl_pct": 0.0,
-    "curr_price": 124.5,
-    "unrealized_pct": 2.05,
+    "curr_price": 126.5,
+    "unrealized_pct": 3.69,
     "curr_stop": 117.1,
     "tp_stage1": 131.8,
-    "ma10": 123.4
+    "ma10": 124.4
   },
   {
     "code": "2379",
@@ -28,16 +28,16 @@
     "total_invested": 199261.873,
     "shares_a": 131,
     "shares_b": 131,
-    "days_held": 1,
+    "days_held": 2,
     "is_breakeven": false,
     "lot_a_sold": false,
     "lot_a_revenue": 0.0,
     "lot_a_pnl_pct": 0.0,
-    "curr_price": 762.0,
-    "unrealized_pct": 0.26,
+    "curr_price": 754.0,
+    "unrealized_pct": -0.79,
     "curr_stop": 729.6,
     "tp_stage1": 820.8,
-    "ma10": 744.9
+    "ma10": 748.3
   },
   {
     "code": "2481",
@@ -48,15 +48,15 @@
     "total_invested": 199829.77734374997,
     "shares_a": 562,
     "shares_b": 563,
-    "days_held": 0,
+    "days_held": 1,
     "is_breakeven": false,
     "lot_a_sold": false,
     "lot_a_revenue": 0.0,
     "lot_a_pnl_pct": 0.0,
-    "curr_price": 177.5,
-    "unrealized_pct": 0.0,
+    "curr_price": 174.5,
+    "unrealized_pct": -1.69,
     "curr_stop": 170.4,
     "tp_stage1": 191.7,
-    "ma10": 175.7
+    "ma10": 171.8
   }
 ]
