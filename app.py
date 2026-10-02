@@ -8,6 +8,7 @@ import os
 import base64
 import requests
 import datetime
+import importlib
 
 st.set_page_config(page_title="短線成長股決策助手 V2.0", page_icon="📈", layout="wide")
 
@@ -55,7 +56,6 @@ def load_json(filepath, default):
         with open(filepath, "r", encoding="utf-8") as f: return json.load(f)
     except Exception: return default
 
-# 💡 通用 GitHub 反向同步函式 (支援 JSON 與 CSV 歷史帳本)
 def push_file_to_github(filepath, content_bytes):
     if "GITHUB_TOKEN" in st.secrets and "GITHUB_REPO" in st.secrets:
         try:
@@ -234,12 +234,68 @@ tab_radar, tab_tracker, tab_batch, tab_single, tab_watchlist, tab_docs = st.tabs
     "📖 策略手冊與 SOP 指南"
 ])
 
-# ================= TAB 0: 每日雷達戰報 =================
+# ================= TAB 0: 每日雷達戰報 (支援手動即時掃描) =================
 with tab_radar:
-    st.subheader("📡 全自動獵股雷達・今日盤後戰報")
+    # 頂部操作列：標題 + 手動掃描按鈕
+    c_title, c_scan = st.columns([3, 1.3])
+    with c_title:
+        st.subheader("📡 全自動獵股雷達・今日盤後戰報")
+    with c_scan:
+        btn_manual_scan = st.button("⚡ 手動立即掃描雷達", type="primary", use_container_width=True)
+
+    # 💡 核心新增：手動執行 3-1-2 漏斗與實盤追蹤
+    if btn_manual_scan:
+        with st.spinner("🚀 正在連線證交所抓取法人籌碼、股本與營收，進行 3-1-2 漏斗運算... (約需 15~20 秒)"):
+            try:
+                import screener
+                import tracker
+                importlib.reload(screener)
+                importlib.reload(tracker)
+
+                # 1. 執行雷達篩選
+                screener.run_screener()
+                # 2. 執行實盤持倉追蹤
+                tracker.run_tracker()
+
+                # 3. 自動反向同步回 GitHub
+                new_rep = load_json(REPORT_FILE, {})
+                if new_rep:
+                    save_json(REPORT_FILE, new_rep)
+
+                new_pos = load_json(POSITIONS_FILE, [])
+                if new_pos:
+                    save_json(POSITIONS_FILE, new_pos)
+
+                if os.path.exists(HISTORY_FILE):
+                    with open(HISTORY_FILE, "rb") as f:
+                        push_file_to_github(HISTORY_FILE, f.read())
+
+                st.success("✅ 雷達掃描與持倉結算已完成，資料已同步至 GitHub！")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ 手動掃描異常: {e}")
+
+    # GitHub Actions 遠端備援小選單
+    with st.expander("☁️ GitHub Actions 遠端開機備援", expanded=False):
+        st.caption("若伺服器網路異常，可直接向 GitHub Actions 發送遠端強制開機信號：")
+        if st.button("🚀 命令 GitHub Actions 立即開機掃描", key="btn_gha_dispatch"):
+            if "GITHUB_TOKEN" in st.secrets and "GITHUB_REPO" in st.secrets:
+                t_token = st.secrets["GITHUB_TOKEN"]
+                t_repo = st.secrets["GITHUB_REPO"]
+                dispatch_url = f"https://api.github.com/repos/{t_repo}/actions/workflows/auto_scan.yml/dispatches"
+                d_headers = {"Authorization": f"token {t_token}", "Accept": "application/vnd.github.v3+json"}
+                res_d = requests.post(dispatch_url, headers=d_headers, json={"ref": "main"})
+                if res_d.status_code == 204:
+                    st.success("✅ 已成功向 GitHub 發送開機指令！Actions 正在雲端運行，稍候請手動重整頁面。")
+                else:
+                    st.error(f"⚠️ 觸發失敗 ({res_d.status_code}): {res_d.text}")
+            else:
+                st.warning("尚未設定 GITHUB_TOKEN 或 GITHUB_REPO。")
+
+    st.write("---")
     report = load_json(REPORT_FILE, {})
     if not report:
-        st.info("💡 目前尚未有雷達報告。每日 16:30 GitHub Actions 會自動更新產出！")
+        st.info("💡 目前尚未有雷達報告。每日 16:30 GitHub Actions 會自動更新產出，亦可點擊上方按鈕立即掃描！")
     else:
         cr1, cr2, cr3 = st.columns(3)
         cr1.metric("最後掃描時間", report.get("update_time", "未知"))
@@ -294,7 +350,7 @@ with tab_radar:
         else:
             st.info("⏸ 今日籌碼與基本面強勢股尚未剛好踩在均線深蹲點，建議維持觀望。")
 
-# ================= TAB 1: 實盤追蹤與績效帳本 (核心新增手動平倉結案) =================
+# ================= TAB 1: 實盤追蹤與績效帳本 =================
 with tab_tracker:
     st.subheader("📊 方案 B：前向實盤追蹤流水帳本 (Forward-Walk Paper Trading)")
     
@@ -356,7 +412,6 @@ with tab_tracker:
             })
         st.dataframe(pd.DataFrame(pos_display), use_container_width=True, hide_index=True)
         
-        # 💡 核心新增功能：手動平倉結案面板
         with st.expander("🎯 手動平倉結案（自訂出場價記帳至歷史明細）", expanded=True):
             st.info("若你已在券商帳戶實際出清該檔股票，可在此填寫賣出價，系統將自動計算損益並歸檔至歷史結案帳本！")
             c_close1, c_close2, c_close3 = st.columns(3)
@@ -381,7 +436,6 @@ with tab_tracker:
                     cost = float(matched_pos['total_invested'])
                     days = int(matched_pos.get('days_held', 0))
                     
-                    # 計算總回收金額（考量是否曾賣出過半倉）
                     if matched_pos.get('lot_a_sold'):
                         shares_b = matched_pos['shares_b']
                         rev_b = shares_b * e_price * (1 - FEE_RATE - TAX_RATE)
@@ -398,7 +452,6 @@ with tab_tracker:
                     net_pnl = tot_rev - cost
                     tot_roi = (net_pnl / cost) * 100
                     
-                    # 1. 建立結案交易紀錄
                     new_record = {
                         "代號": matched_pos['code'],
                         "名稱": matched_pos['name'],
@@ -415,18 +468,15 @@ with tab_tracker:
                         "出場原因": user_exit_reason
                     }
                     
-                    # 2. 寫入歷史結案 DataFrame
                     df_history = pd.concat([df_history, pd.DataFrame([new_record])], ignore_index=True)
                     save_history_csv(df_history)
                     
-                    # 3. 從在倉部位移除並同步 GitHub
                     positions = [p for p in positions if f"{p['name']} ({p['code']})" != target_to_close]
                     save_json(POSITIONS_FILE, positions)
                     
                     st.success(f"✅ 已成功平倉 {target_to_close}！損益：NT$ {int(net_pnl):+,d} ({tot_roi:+.2f}%)，已歸檔至歷史明細！")
                     st.rerun()
 
-        # 垃圾桶：僅用於刪除誤入或未建倉部位
         with st.expander("🗑️ 手動刪除未建倉或誤入之虛擬部位 (不計入歷史損益)", expanded=False):
             st.warning("若你在真實帳戶中並未買進該檔股票，可在此直接剔除（不會產生損益紀錄）。")
             del_pos_target = st.selectbox("選擇要丟棄的虛擬部位", options=[f"{p['name']} ({p['code']})" for p in positions], key="sel_discard_pos")
@@ -439,8 +489,6 @@ with tab_tracker:
         st.info("目前無在倉持股，現金池 100% 待命。")
 
     st.write("---")
-    
-    # 歷史結案明細表呈現區
     st.markdown("#### 📋 【歷史結案明細表】")
     if not df_history.empty:
         st.dataframe(df_history, use_container_width=True, hide_index=True)
@@ -804,7 +852,7 @@ with tab_docs:
 
     with st.expander("🔍 一、 盤後全自動獵股漏斗 SOP（3 → 1 → 2 順序過濾）", expanded=True):
         st.write("• **步驟 3【籌碼鎖定度與階梯門檻】**：最新日投信買超 >= 50 張；若股本在 60 億~150 億，門檻提高至 >= 250 張。")
-        st.write("• **步驟 1【放寬股本規模 (20億 ~ 150億)】**：鎖定 20 ~ 60 億中型成長股與 60 ~ 150 億旗艦領頭羊（如欣興、技嘉），排除 > 150 億權值牛皮股。")
+        st.write("• **步驟 1【放寬股本規模 (20億 ~ 150億)】**：鎖定 20~60 億中型成長股與 60~150 億旗艦領頭羊（如欣興、技嘉），排除 > 150 億權值牛皮股。")
         st.write("• **步驟 2【業績加速動能】**：最新公告單月營收年增率 YoY > 20%，具實質基本面保護。")
 
     with st.expander("🧘 二、 盤後「量縮深蹲 (Squat)」技術面檢驗 SOP", expanded=True):
