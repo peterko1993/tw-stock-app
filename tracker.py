@@ -45,12 +45,13 @@ def run_tracker():
     # ================= 1. 檢驗既有持倉部位 =================
     for pos in positions:
         ticker = pos['ticker']
-        code = pos['code']
+        code = str(pos['code']).split('.')[0].strip()
         name = pos['name']
         entry_p = float(pos['entry_price'])
+        entry_d = str(pos['entry_date']).strip()
         
         try:
-            df = yf.download(ticker, period="1mo", interval="1d", progress=False)
+            df = yf.download(ticker, period="2mo", interval="1d", progress=False)
             if df.empty:
                 remaining_positions.append(pos)
                 continue
@@ -64,21 +65,23 @@ def run_tracker():
             close = float(latest['Close'])
             ma10 = float(latest['MA10'])
             
-            pos['days_held'] += 1
-            d = pos['days_held']
+            # 💡【核心修正】：以台股實際開盤日 K 棒計算開盤交易日天數 (徹底排除週末與國定假日)
+            trade_dates_after = [idx.strftime('%Y-%m-%d') for idx in df.index if idx.strftime('%Y-%m-%d') > entry_d]
+            d = len(trade_dates_after)
+            pos['days_held'] = d  # 自動同步校正
 
             # (1) 停損檢驗 (動態保本線 或 -4% 硬停損)
-            effective_stop = (entry_p * 1.002) if (pos.get('is_breakeven') and d > 1) else (entry_p * 0.96)
+            effective_stop = (entry_p * 1.002) if (pos.get('is_breakeven') and d >= 1) else (entry_p * 0.96)
             if low <= effective_stop:
                 exit_p = min(float(latest['Open']), effective_stop)
                 shares_left = pos['shares_a'] + pos['shares_b']
                 rev = shares_left * exit_p * (1 - FEE_RATE - TAX_RATE)
                 pnl_amt = rev - (shares_left * entry_p * (1 + FEE_RATE))
                 pnl_pct = (exit_p - entry_p) / entry_p * 100
-                reason = "🛡️ 動態保本出場 (+0.2%)" if (pos.get('is_breakeven') and d > 1) else "🛑 硬停損 (-4%)"
+                reason = "🛡️ 動態保本出場 (+0.2%)" if (pos.get('is_breakeven') and d >= 1) else "🛑 硬停損 (-4%)"
 
                 new_closed_trades.append({
-                    "代號": code, "名稱": name, "進場日": pos['entry_date'], "進場價": entry_p,
+                    "代號": code, "名稱": name, "進場日": entry_d, "進場價": entry_p,
                     "出場日": today_str, "持股天數": d, "投入金額": int(pos['total_invested']),
                     "回收金額": int(rev), "淨損益(NTD)": int(pnl_amt), "部位A_損益%": round(pnl_pct, 2),
                     "部位B_損益%": round(pnl_pct, 2), "綜合報酬率%": round(pnl_pct, 2), "出場原因": reason
@@ -89,7 +92,7 @@ def run_tracker():
             # (2) 標記動態保本 (+4%)
             if not pos.get('is_breakeven') and high >= entry_p * 1.04:
                 pos['is_breakeven'] = True
-                print(f"   [保本激活] {name} 盤中觸及 +4%，次日起停損調升至成本線")
+                print(f"   [保本激活] {name} 盤中觸及 +4%，次個交易日起停損調升至成本線")
 
             # (3) 階段一停利 (+8% 出脫 50% 部位)
             if not pos.get('lot_a_sold') and high >= entry_p * 1.08:
@@ -111,7 +114,7 @@ def run_tracker():
                 pnl_b_pct = (exit_p - entry_p) / entry_p * 100
 
                 new_closed_trades.append({
-                    "代號": code, "名稱": name, "進場日": pos['entry_date'], "進場價": entry_p,
+                    "代號": code, "名稱": name, "進場日": entry_d, "進場價": entry_p,
                     "出場日": today_str, "持股天數": d, "投入金額": int(pos['total_invested']),
                     "回收金額": int(tot_rev), "淨損益(NTD)": int(pnl_amt),
                     "部位A_損益%": round(pos['lot_a_pnl_pct'], 2), "部位B_損益%": round(pnl_b_pct, 2),
@@ -120,7 +123,7 @@ def run_tracker():
                 print(f"   [波段出場] {name} 破 10MA 全數落袋，綜合報酬: {tot_pct:+.2f}%")
                 continue
 
-            # (5) 時間停損 (4天無動能)
+            # (5) 💡 時間停損：嚴格以「滿 4 個實際交易日且無動能」判定
             if d >= 4 and not pos.get('lot_a_sold') and close <= entry_p * 1.03:
                 exit_p = close
                 shares_left = pos['shares_a'] + pos['shares_b']
@@ -129,15 +132,14 @@ def run_tracker():
                 pnl_pct = (exit_p - entry_p) / entry_p * 100
 
                 new_closed_trades.append({
-                    "代號": code, "名稱": name, "進場日": pos['entry_date'], "進場價": entry_p,
+                    "代號": code, "名稱": name, "進場日": entry_d, "進場價": entry_p,
                     "出場日": today_str, "持股天數": d, "投入金額": int(pos['total_invested']),
                     "回收金額": int(rev), "淨損益(NTD)": int(pnl_amt), "部位A_損益%": round(pnl_pct, 2),
-                    "部位B_損益%": round(pnl_pct, 2), "綜合報酬率%": round(pnl_pct, 2), "出場原因": "⏳ 時間停損 (4天無動能)"
+                    "部位B_損益%": round(pnl_pct, 2), "綜合報酬率%": round(pnl_pct, 2), "出場原因": "⏳ 時間停損 (4個交易日無動能)"
                 })
-                print(f"   [時間停損] {name} 持有滿 4 天未發動，平倉離場")
+                print(f"   [時間停損] {name} 持有滿 4 個交易日未發動，平倉離場")
                 continue
 
-            # 💡 記錄最新即時關鍵價位
             pos['curr_price'] = round(close, 1)
             pos['unrealized_pct'] = round((close - entry_p) / entry_p * 100, 2)
             pos['ma10'] = round(ma10, 1)
@@ -155,8 +157,8 @@ def run_tracker():
 
     if open_slots > 0 and squat_candidates:
         for cand in squat_candidates[:open_slots]:
-            cand_code = cand['code']
-            if any(p['code'] == cand_code for p in remaining_positions):
+            cand_code = str(cand['code']).split('.')[0].strip()
+            if any(str(p['code']).split('.')[0].strip() == cand_code for p in remaining_positions):
                 continue
             
             cand_ticker = cand['ticker']
