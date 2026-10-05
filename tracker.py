@@ -70,20 +70,19 @@ def run_tracker():
             close = float(latest['Close'])
             ma10 = float(latest['MA10'])
             
-            # 以台股實際開盤日 K 棒計算開盤交易日天數
+            # 以台股實際開盤日 K 棒計算開盤交易日天數 (進場當日為第 0 天)
             trade_dates_after = [idx.strftime('%Y-%m-%d') for idx in df.index if idx.strftime('%Y-%m-%d') > entry_d]
             d = len(trade_dates_after)
             pos['days_held'] = d
 
-            # 💡【核心功能】：智慧展延檢驗
-            # 條件：今日雷達再次掃到 + 尚未被展延過 + 帳面處於非虧損狀態 (Close >= entry_p * 0.995)
+            # 智慧展延檢驗
             if "is_extended" not in pos:
                 pos["is_extended"] = False
             
             if not pos["is_extended"] and (code in radar_squat_codes):
-                if close >= (entry_p * 0.995):  # 嚴格非虧損保護
+                if close >= (entry_p * 0.995):
                     pos["is_extended"] = True
-                    print(f"   🔄 [智慧展延] {name} ({code}) 今日再次符合雷達深蹲且維持成本之上，持有天數上限放寬至 7 個交易日！")
+                    print(f"   🔄 [智慧展延] {name} ({code}) 今日再次符合雷達深蹲且維持成本之上，上限放寬至 7 個交易日！")
 
             max_allowed_days = 7 if pos.get("is_extended") else 4
 
@@ -140,7 +139,7 @@ def run_tracker():
                 print(f"   [波段出場] {name} 破 10MA 全數落袋，綜合報酬: {tot_pct:+.2f}%")
                 continue
 
-            # (5) 💡 時間停損：嚴格以最大容許交易日判定（標準 4 天，展延 7 天）
+            # (5) 時間停損：嚴格以開盤交易日判定
             if d >= max_allowed_days and not pos.get('lot_a_sold') and close <= entry_p * 1.03:
                 exit_p = close
                 shares_left = pos['shares_a'] + pos['shares_b']
@@ -170,40 +169,74 @@ def run_tracker():
             print(f"⚠️ 分析 {ticker} 異常: {e}")
             remaining_positions.append(pos)
 
-    # ================= 2. 檢驗今日雷達新候選股建倉 =================
+    # ================= 2. 檢驗雷達候選股建倉 (次日右側過高確認 SOP) =================
     open_slots = MAX_SLOTS - len(remaining_positions)
     squat_candidates = [s for s in report.get("stocks", []) if s.get("is_squat")]
+    report_scan_date = report.get("trade_date", "")
 
     if open_slots > 0 and squat_candidates:
-        for cand in squat_candidates[:open_slots]:
+        for cand in squat_candidates:
+            if open_slots <= 0:
+                break
             cand_code = str(cand['code']).split('.')[0].strip()
             if any(str(p['code']).split('.')[0].strip() == cand_code for p in remaining_positions):
                 continue
             
             cand_ticker = cand['ticker']
             cand_name = cand['name']
-            buy_price = float(cand['close'])
+            right_trigger = float(cand.get('right_trigger', cand.get('high', cand['close'])))
             
-            total_shares = int(SLOT_BUDGET / (buy_price * (1 + FEE_RATE)))
-            if total_shares < 100: continue
+            # 💡【核心修正】：當天 16:30 剛掃描出的標的，當天已收盤無法交易，必須等待次日檢驗
+            cand_scan_d = str(cand.get('scan_date', report_scan_date)).replace('-', '')
+            today_clean = today_str.replace('-', '')
             
-            shares_a = total_shares // 2
-            shares_b = total_shares - shares_a
-            cost = total_shares * buy_price * (1 + FEE_RATE)
+            if cand_scan_d >= today_clean:
+                print(f"   ⏳ [候選待命] {cand_name} ({cand_code}) 為今日盤後深蹲標的，等待次日開盤檢驗右側過高確認 (突破 ${right_trigger})")
+                continue
             
-            remaining_positions.append({
-                "code": cand_code, "name": cand_name, "ticker": cand_ticker,
-                "entry_date": today_str, "entry_price": buy_price,
-                "total_invested": cost, "shares_a": shares_a, "shares_b": shares_b,
-                "days_held": 0, "is_breakeven": False, "lot_a_sold": False,
-                "lot_a_revenue": 0.0, "lot_a_pnl_pct": 0.0,
-                "curr_price": buy_price, "unrealized_pct": 0.0,
-                "curr_stop": round(buy_price * 0.96, 1),
-                "tp_stage1": round(buy_price * 1.08, 1),
-                "ma10": round(buy_price * 0.99, 1),
-                "is_extended": False
-            })
-            print(f"   [新開倉] 建立實盤虛擬持倉：{cand_name} ({cand_code})，買入價 ${buy_price}")
+            # 若為前一日的深蹲候選，下載今日實際行情檢驗是否突破深蹲日高點
+            try:
+                df_cand = yf.download(cand_ticker, period="5d", interval="1d", progress=False)
+                if df_cand.empty: continue
+                if isinstance(df_cand.columns, pd.MultiIndex):
+                    df_cand.columns = df_cand.columns.get_level_values(0)
+                
+                latest_cand = df_cand.iloc[-1]
+                t1_high = float(latest_cand['High'])
+                t1_open = float(latest_cand['Open'])
+                t1_close = float(latest_cand['Close'])
+                
+                # SOP：盤中最高價突破深蹲日高點才准進場
+                if t1_high >= right_trigger:
+                    buy_price = max(t1_open, right_trigger)
+                    total_shares = int(SLOT_BUDGET / (buy_price * (1 + FEE_RATE)))
+                    if total_shares < 100: continue
+                    
+                    shares_a = total_shares // 2
+                    shares_b = total_shares - shares_a
+                    cost = total_shares * buy_price * (1 + FEE_RATE)
+                    
+                    remaining_positions.append({
+                        "code": cand_code, "name": cand_name, "ticker": cand_ticker,
+                        "entry_date": today_str,  # 💡 正確以次日（今日）為正式進場日！
+                        "entry_price": round(buy_price, 1),
+                        "total_invested": cost, "shares_a": shares_a, "shares_b": shares_b,
+                        "days_held": 0,
+                        "is_breakeven": False, "lot_a_sold": False,
+                        "lot_a_revenue": 0.0, "lot_a_pnl_pct": 0.0,
+                        "curr_price": round(t1_close, 1),
+                        "unrealized_pct": round((t1_close - buy_price) / buy_price * 100, 2),
+                        "curr_stop": round(buy_price * 0.96, 1),
+                        "tp_stage1": round(buy_price * 1.08, 1),
+                        "ma10": round(float(df_cand['Close'].rolling(10).mean().iloc[-1]), 1) if len(df_cand) >= 10 else round(buy_price * 0.99, 1),
+                        "is_extended": False
+                    })
+                    open_slots -= 1
+                    print(f"   🎯 [右側確認進場] {cand_name} ({cand_code}) 盤中最高 ${t1_high} 突破門檻 ${right_trigger}，於今日 ({today_str}) 正式建倉！成本 ${buy_price}")
+                else:
+                    print(f"   ❌ [放棄建倉] {cand_name} ({cand_code}) 今日最高 ${t1_high} 未能突破門檻 ${right_trigger}，轉折失敗放棄進場。")
+            except Exception as e:
+                print(f"   ⚠️ 檢驗 {cand_name} 異常: {e}")
 
     save_json(POSITIONS_FILE, remaining_positions)
     
