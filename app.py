@@ -177,7 +177,7 @@ if "watchlist" not in st.session_state:
 # ================= 側邊欄設定 =================
 with st.sidebar:
     st.header("🎛️ 策略防禦與參數調校")
-    with st.expander("🛡️ 實盤防禦開關", expanded=True):
+    with st.expander("🛡️️ 實盤防禦開關", expanded=True):
         use_market_filter = st.toggle("啟用大盤多空濾網", value=True)
         use_right_side = st.toggle("啟用右側過高確認", value=True)
         be_threshold = st.slider("動態保本啟動點 (+%)", 2.5, 6.0, 4.0, 0.5)
@@ -263,7 +263,7 @@ with tab_radar:
                     with open(HISTORY_FILE, "rb") as f:
                         push_file_to_github(HISTORY_FILE, f.read())
 
-                st.success("✅ 雷達掃描與交易日持倉結算已完成，已同步至 GitHub！")
+                st.success("✅ 雷達掃描與持倉結算已完成，已同步至 GitHub！")
                 st.rerun()
             except Exception as e:
                 st.error(f"❌ 手動掃描異常: {e}")
@@ -340,7 +340,7 @@ with tab_radar:
         else:
             st.info("⏸ 今日籌碼與基本面強勢股尚未剛好踩在均線深蹲點，建議維持觀望。")
 
-# ================= TAB 1: 實盤追蹤與績效帳本 (交易日天數呈現) =================
+# ================= TAB 1: 實盤追蹤與績效帳本 (顯示展延天數) =================
 with tab_tracker:
     st.subheader("📊 方案 B：前向實盤追蹤流水帳本 (Forward-Walk Paper Trading)")
     
@@ -376,6 +376,10 @@ with tab_tracker:
             curr_p = float(p.get('curr_price', entry_p))
             unreal_pct = float(p.get('unrealized_pct', 0.0))
             days = p.get('days_held', 0)
+            is_ext = p.get('is_extended', False)
+            limit_days = 7 if is_ext else 4
+            
+            day_str = f"{days}/{limit_days}天 🔄已展延" if is_ext else f"{days}/{limit_days}天"
             
             if p.get('is_breakeven') and days >= 1:
                 stop_display = f"🛡️ ${entry_p * 1.002:.1f} (保本線)"
@@ -393,7 +397,7 @@ with tab_tracker:
             pos_display.append({
                 "標的": f"{p['name']} ({p['code']})",
                 "進場日": p['entry_date'],
-                "持有開盤交易日": f"{days} 個交易日",  # 💡 明確標示交易日
+                "持有交易日進度": day_str,  # 💡 標註是否啟動展延
                 "進場成本": f"${entry_p:.1f}",
                 "現價 (浮盈%)": f"${curr_p:.1f} ({unreal_pct:+.2f}%)",
                 "🛑 當前防守停損": stop_display,
@@ -606,7 +610,7 @@ with tab_single:
     options_list = list(st.session_state.watchlist.keys()) + ["✏️ 臨時手動輸入其他代號"]
     selected_option = st.selectbox("選擇診斷標的：", options=options_list, index=0)
     
-    if selected_option == "✏️ 臨時手動輸入其他代號":
+    if selected_option == "✏️️ 臨時手動輸入其他代號":
         c1, c2 = st.columns([2, 1])
         with c1: custom_code = st.text_input("輸入 4 位數代號", value="2368")
         with c2: market_suffix = st.selectbox("市場別", [".TW (上市)", ".TWO (上櫃)"], index=0)
@@ -856,9 +860,9 @@ with tab_docs:
         st.write("• **大盤多頭濾網】**：加權指數收盤必須站穩 20MA（月線）之上。若大盤處於月線反壓，全市場雷達強制休眠。")
         st.write("• **次日右側過高確認】**：訊號成立次日，盤中最高價突破深蹲日最高點才准掛單進場；未突破則一律放棄建倉。")
 
-    with st.expander("🛑 四、 嚴格五大出場紀律 SOP（以開盤交易日為準）", expanded=True):
+    with st.expander("🛑 四、 嚴格五大出場紀律 SOP（含智慧展延防護）", expanded=True):
         st.write("• **🛑 防線 1【硬停損線 (-4.0%)】**：跌破成本價之 -4.0%，無條件市價全數砍單。")
-        st.write("• **⏳ 防線 2【時間停損 (4個開盤交易日)】**：進場後持有滿 **4 個實際交易日（排除例假日）** 漲幅未達 +3%，第 5 天開盤平手換股。")
+        st.write("• **⏳ 防線 2【時間停損 (4個交易日 / 最多展延至7天)】**：持有滿 4 個實際交易日漲幅未達 +3% 則平手換股。**若持有期間再次符合雷達深蹲且帳面維持成本之上，自動展延 1 次至滿 7 個交易日**。")
         st.write("• **🛡️ 防線 3【動態保本機制 (+4.0%)】**：盤中浮盈達 +4.0% 時，次個交易日起停損防線調升至成本價 (+0.2%)，消滅賺變賠。")
         st.write("• **🎯 防線 4【第一階段停利 (+8.0%)】**：觸及成本價 +8.0% 時，掛單賣出部位 A（50% 股數）鎖住勝果。")
         st.write("• **🏄 防線 5【第二階段波段落袋 (破 10MA)】**：剩餘部位 B 只要收盤跌破 10MA，次個交易日開盤市價出清。")
