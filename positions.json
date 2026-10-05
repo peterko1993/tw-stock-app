@@ -1,25 +1,5 @@
 [
   {
-    "code": "2441",
-    "name": "超豐            ",
-    "ticker": "2441.TW",
-    "entry_date": "2026-09-29",
-    "entry_price": 122.0,
-    "total_invested": 199978.38314999998,
-    "shares_a": 819,
-    "shares_b": 819,
-    "days_held": 5,
-    "is_breakeven": true,
-    "lot_a_sold": false,
-    "lot_a_revenue": 0.0,
-    "lot_a_pnl_pct": 0.0,
-    "curr_price": 126.5,
-    "unrealized_pct": 3.69,
-    "curr_stop": 122.2,
-    "tp_stage1": 131.8,
-    "ma10": 124.4
-  },
-  {
     "code": "2481",
     "name": "強茂            ",
     "ticker": "2481.TW",
@@ -28,16 +8,17 @@
     "total_invested": 199829.77734374997,
     "shares_a": 562,
     "shares_b": 563,
-    "days_held": 3,
-    "is_breakeven": false,
+    "days_held": 2,
+    "is_breakeven": true,
     "lot_a_sold": false,
     "lot_a_revenue": 0.0,
     "lot_a_pnl_pct": 0.0,
-    "curr_price": 174.5,
-    "unrealized_pct": -1.69,
+    "curr_price": 188.0,
+    "unrealized_pct": 5.92,
     "curr_stop": 170.4,
     "tp_stage1": 191.7,
-    "ma10": 171.8
+    "ma10": 174.2,
+    "is_extended": false
   },
   {
     "code": "2379",
@@ -48,16 +29,16 @@
     "total_invested": 199261.0,
     "shares_a": 130,
     "shares_b": 131,
-    "days_held": 4,
+    "days_held": 3,
     "is_breakeven": false,
     "lot_a_sold": false,
     "lot_a_revenue": 0.0,
     "lot_a_pnl_pct": 0.0,
-    "curr_price": 760.0,
-    "unrealized_pct": 0.0,
+    "curr_price": 757.0,
+    "unrealized_pct": -0.39,
     "curr_stop": 729.6,
     "tp_stage1": 820.8,
-    "ma10": 752.4,
-    "is_extended": false
+    "ma10": 752.5,
+    "is_extended": true
   }
 ]
