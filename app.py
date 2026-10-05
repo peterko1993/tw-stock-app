@@ -243,7 +243,7 @@ with tab_radar:
         btn_manual_scan = st.button("⚡ 手動立即掃描雷達", type="primary", use_container_width=True)
 
     if btn_manual_scan:
-        with st.spinner("🚀 正在連線證交所進行 3-1-2 漏斗與持倉交易日校正... (約需 15~20 秒)"):
+        with st.spinner("🚀 正在連線證交所進行 3-1-2 漏斗與次日右側過高檢驗... (約需 15~20 秒)"):
             try:
                 import screener
                 import tracker
@@ -263,7 +263,7 @@ with tab_radar:
                     with open(HISTORY_FILE, "rb") as f:
                         push_file_to_github(HISTORY_FILE, f.read())
 
-                st.success("✅ 雷達掃描與持倉結算已完成，已同步至 GitHub！")
+                st.success("✅ 雷達掃描與實盤追蹤已完成，已同步至 GitHub！")
                 st.rerun()
             except Exception as e:
                 st.error(f"❌ 手動掃描異常: {e}")
@@ -302,6 +302,7 @@ with tab_radar:
             for s in squat_stocks:
                 s_name = s.get('name', '')
                 s_code = str(s.get('code', '')).split('.')[0].strip()
+                right_trigger_p = s.get('right_trigger', s.get('high', s['close']))
                 
                 with st.container():
                     c1, c2, c3, c4 = st.columns([2.2, 1.8, 2.0, 2.0])
@@ -313,7 +314,7 @@ with tab_radar:
                     c2.write(f"• **投信買超**：`+{s['trust_buy']}` 張")
                     c2.write(f"• **營收 YoY**：`+{s['rev_yoy']}%`")
                     
-                    c3.write(f"• **建議區間**：`${s['buy_min']} ~ ${s['buy_max']}`")
+                    c3.write(f"• **🎯 明日右側確認價**：`突破 ${right_trigger_p}`")
                     c3.write(f"• **硬停損**：`${s['stop_loss']}`")
                     c3.write(f"• **目標價 (+8%)**：`${s['take_profit']}`")
                     
@@ -340,7 +341,7 @@ with tab_radar:
         else:
             st.info("⏸ 今日籌碼與基本面強勢股尚未剛好踩在均線深蹲點，建議維持觀望。")
 
-# ================= TAB 1: 實盤追蹤與績效帳本 (支援一鍵撤回結案) =================
+# ================= TAB 1: 實盤追蹤與績效帳本 (修正精準撤回與校正) =================
 with tab_tracker:
     st.subheader("📊 方案 B：前向實盤追蹤流水帳本 (Forward-Walk Paper Trading)")
     
@@ -407,6 +408,7 @@ with tab_tracker:
             })
         st.dataframe(pd.DataFrame(pos_display), use_container_width=True, hide_index=True)
         
+        # 💡 控制台 A：手動平倉結案
         with st.expander("🎯 手動平倉結案（自訂出場價記帳至歷史明細）", expanded=False):
             st.info("若你已在券商帳戶實際出清該檔股票，可在此填寫賣出價，系統將自動計算損益並歸檔至歷史結案帳本！")
             c_close1, c_close2, c_close3 = st.columns(3)
@@ -469,9 +471,36 @@ with tab_tracker:
                     positions = [p for p in positions if f"{p['name']} ({p['code']})" != target_to_close]
                     save_json(POSITIONS_FILE, positions)
                     
-                    st.success(f"✅ 已成功平倉 {target_to_close}！損益：NT$ {int(net_pnl):+,d} ({tot_roi:+.2f}%)，已歸檔至歷史明細！")
+                    st.success(f"✅ 已成功平倉 {target_to_close}！損益：NT$ {int(net_pnl):+,d} ({tot_roi:+.2f}%)！")
                     st.rerun()
 
+        # 💡 控制台 B：校正在倉持股資訊 (修正進場日或買進成本)
+        with st.expander("✏️ 校正在倉部位資訊（修正進場日期或買進成本）", expanded=False):
+            st.info("若系統進場日提前了一天，或成本價與券商實際成交價有微幅落差，可在此直接校正！")
+            c_edit1, c_edit2, c_edit3 = st.columns(3)
+            with c_edit1:
+                edit_target = st.selectbox("選擇要校正的在倉股票", options=[f"{p['name']} ({p['code']})" for p in positions], key="sel_edit_pos")
+                edit_pos = next((p for p in positions if f"{p['name']} ({p['code']})" == edit_target), None)
+            with c_edit2:
+                default_ed = edit_pos['entry_date'] if edit_pos else "2026-10-01"
+                new_entry_date = st.text_input("修正後的進場日期 (YYYY-MM-DD)", value=default_ed, key="in_edit_date")
+            with c_edit3:
+                default_ep = float(edit_pos['entry_price']) if edit_pos else 100.0
+                new_entry_price = st.number_input("修正後的進場成本價", value=default_ep, step=0.1, key="in_edit_price")
+                
+            if st.button("確認儲存校正數值", key="btn_save_edit", type="primary", use_container_width=True):
+                if edit_pos:
+                    edit_pos['entry_date'] = new_entry_date.strip()
+                    edit_pos['entry_price'] = float(new_entry_price)
+                    edit_pos['curr_stop'] = round(float(new_entry_price) * 0.96, 1)
+                    edit_pos['tp_stage1'] = round(float(new_entry_price) * 1.08, 1)
+                    tot_shares = edit_pos['shares_a'] + edit_pos['shares_b']
+                    edit_pos['total_invested'] = tot_shares * float(new_entry_price) * (1 + FEE_RATE)
+                    save_json(POSITIONS_FILE, positions)
+                    st.success(f"✅ 已成功將 {edit_target} 校正為進場日 {new_entry_date}、成本 ${new_entry_price}！")
+                    st.rerun()
+
+        # 控制台 C：丟棄誤入部位
         with st.expander("🗑️ 手動刪除未建倉或誤入之虛擬部位 (不計入歷史損益)", expanded=False):
             st.warning("若你在真實帳戶中並未買進該檔股票，可在此直接剔除（不會產生損益紀錄）。")
             del_pos_target = st.selectbox("選擇要丟棄的虛擬部位", options=[f"{p['name']} ({p['code']})" for p in positions], key="sel_discard_pos")
@@ -483,9 +512,11 @@ with tab_tracker:
     else:
         st.info("目前無在倉持股，現金池 100% 待命。")
 
-    # 💡 核心新增：一鍵撤回誤結案紀錄
+    st.write("---")
+    
+    # 💡 核心新增：一鍵撤回誤結案紀錄 (精確過濾，絕不殘留)
     if not df_history.empty:
-        with st.expander("🔄 誤結案一鍵還原（撤回歷史紀錄並重返在倉監控）", expanded=False):
+        with st.expander("🔄 誤結案一鍵還原（撤回歷史紀錄並重返在倉監控）", expanded=True):
             st.info("若某筆交易因例假日計算或手滑被誤判定出場，可在此撤回結案紀錄，將其原樣恢復至在倉監控！")
             hist_options = [f"第{i+1}筆：{r['名稱']} ({r['代號']}) - 進場日:{r['進場日']} - 損益:{r['綜合報酬率%']}%" for i, r in df_history.iterrows()]
             sel_hist_item = st.selectbox("選擇要還原的歷史結案記錄", options=hist_options, key="sel_hist_restore")
@@ -495,56 +526,77 @@ with tab_tracker:
             cand_code = str(cand_row['代號']).split('.')[0].strip()
             already_active = any(str(p['code']).split('.')[0].strip() == cand_code for p in positions)
             
+            c_r1, c_r2 = st.columns(2)
+            with c_r1:
+                # 💡 自動提供次日正確進場日選項 (例如 9/30 掃描，自動推薦次日 10/01)
+                default_target_date = str(cand_row['進場日']).strip()
+                if default_target_date == "2026-09-30":
+                    default_target_date = "2026-10-01"
+                restored_entry_d = st.text_input("指定還原後的正確進場日", value=default_target_date, key="in_rest_d")
+            with c_r2:
+                restored_entry_p = st.number_input("指定還原後的進場成本價", value=float(cand_row['進場價']), step=0.1, key="in_rest_p")
+                
             if already_active:
-                st.warning(f"⚠️ 注意：目前在倉持股中已有 {cand_row['名稱']} ({cand_code})。若要還原此筆歷史紀錄，將會自動覆蓋並校正回進場日 {cand_row['進場日']}！")
+                st.warning(f"⚠️ 注意：目前在倉已有 {cand_row['名稱']} ({cand_code})。執行還原將會直接覆蓋，並校正為進場日 {restored_entry_d}！")
             
-            if st.button("確認撤回此筆歷史紀錄並恢復持倉", type="primary", use_container_width=True):
-                # 1. 取得標的最新收盤與均線
-                ticker = f"{cand_code}.TW"
-                for _, t in st.session_state.watchlist.items():
-                    if cand_code in t: ticker = t; break
+            c_btn_res, c_btn_clean = st.columns(2)
+            with c_btn_res:
+                if st.button("確認撤回此筆歷史紀錄並恢復持倉", type="primary", use_container_width=True):
+                    ticker = f"{cand_code}.TW"
+                    for _, t in st.session_state.watchlist.items():
+                        if cand_code in t: ticker = t; break
+                        
+                    entry_p = float(restored_entry_p)
+                    cost = float(cand_row['投入金額']) if cand_row['投入金額'] > 0 else 200000.0
+                    tot_shares = int(cost / (entry_p * (1 + FEE_RATE)))
+                    shares_a = tot_shares // 2
+                    shares_b = tot_shares - shares_a
                     
-                entry_p = float(cand_row['進場價'])
-                cost = float(cand_row['投入金額']) if cand_row['投入金額'] > 0 else 200000.0
-                tot_shares = int(cost / (entry_p * (1 + FEE_RATE)))
-                shares_a = tot_shares // 2
-                shares_b = tot_shares - shares_a
-                
-                restored_pos = {
-                    "code": cand_code,
-                    "name": cand_row['名稱'],
-                    "ticker": ticker,
-                    "entry_date": cand_row['進場日'],
-                    "entry_price": entry_p,
-                    "total_invested": cost,
-                    "shares_a": shares_a,
-                    "shares_b": shares_b,
-                    "days_held": int(cand_row.get('持股天數', 2)),
-                    "is_breakeven": False,
-                    "lot_a_sold": False,
-                    "lot_a_revenue": 0.0,
-                    "lot_a_pnl_pct": 0.0,
-                    "curr_price": entry_p,
-                    "unrealized_pct": 0.0,
-                    "curr_stop": round(entry_p * 0.96, 1),
-                    "tp_stage1": round(entry_p * 1.08, 1),
-                    "ma10": round(entry_p * 0.99, 1),
-                    "is_extended": False
-                }
-                
-                # 2. 如果在倉已有同一檔，先移除它
-                positions = [p for p in positions if str(p['code']).split('.')[0].strip() != cand_code]
-                positions.append(restored_pos)
-                save_json(POSITIONS_FILE, positions)
-                
-                # 3. 從 df_history 刪除該筆記錄
-                df_history = df_history.drop(index=sel_idx).reset_index(drop=True)
-                save_history_csv(df_history)
-                
-                st.success(f"✅ 已成功將 {cand_row['名稱']} ({cand_code}) 撤銷結案，並恢復至進場日 {cand_row['進場日']}！")
-                st.rerun()
+                    restored_pos = {
+                        "code": cand_code,
+                        "name": cand_row['名稱'],
+                        "ticker": ticker,
+                        "entry_date": restored_entry_d.strip(),
+                        "entry_price": entry_p,
+                        "total_invested": cost,
+                        "shares_a": shares_a,
+                        "shares_b": shares_b,
+                        "days_held": 2,
+                        "is_breakeven": False,
+                        "lot_a_sold": False,
+                        "lot_a_revenue": 0.0,
+                        "lot_a_pnl_pct": 0.0,
+                        "curr_price": entry_p,
+                        "unrealized_pct": 0.0,
+                        "curr_stop": round(entry_p * 0.96, 1),
+                        "tp_stage1": round(entry_p * 1.08, 1),
+                        "ma10": round(entry_p * 0.99, 1),
+                        "is_extended": False
+                    }
+                    
+                    # 1. 更新 positions.json
+                    positions = [p for p in positions if str(p['code']).split('.')[0].strip() != cand_code]
+                    positions.append(restored_pos)
+                    save_json(POSITIONS_FILE, positions)
+                    
+                    # 2. 💡【精準刪除】：以代號 + 原進場日為準，100% 抹除對應行
+                    cand_entry_raw = str(cand_row['進場日']).strip()
+                    df_history = df_history[~((df_history['代號'].astype(str).str.split('.').str[0].str.strip() == cand_code) & 
+                                              (df_history['進場日'].astype(str).str.strip() == cand_entry_raw))].reset_index(drop=True)
+                    save_history_csv(df_history)
+                    
+                    st.success(f"✅ 已成功將 {cand_row['名稱']} ({cand_code}) 從歷史結案中撤銷，並恢復至在倉監控（進場日：{restored_entry_d}）！")
+                    st.rerun()
 
-    st.write("---")
+            with c_btn_clean:
+                if st.button("🗑️ 僅從歷史明細刪除此紀錄 (不恢復持倉)", type="secondary", use_container_width=True):
+                    cand_entry_raw = str(cand_row['進場日']).strip()
+                    df_history = df_history[~((df_history['代號'].astype(str).str.split('.').str[0].str.strip() == cand_code) & 
+                                              (df_history['進場日'].astype(str).str.strip() == cand_entry_raw))].reset_index(drop=True)
+                    save_history_csv(df_history)
+                    st.success(f"✅ 已從歷史結案明細表中徹底刪除 {cand_row['名稱']}！")
+                    st.rerun()
+
     st.markdown("#### 📋 【歷史結案明細表】")
     if not df_history.empty:
         st.dataframe(df_history, use_container_width=True, hide_index=True)
@@ -924,7 +976,7 @@ with tab_docs:
     with st.expander("🛑 四、 嚴格五大出場紀律 SOP（含智慧展延防護）", expanded=True):
         st.write("• **🛑 防線 1【硬停損線 (-4.0%)】**：跌破成本價之 -4.0%，無條件市價全數砍單。")
         st.write("• **⏳ 防線 2【時間停損 (4個交易日 / 最多展延至7天)】**：持有滿 4 個實際交易日漲幅未達 +3% 則平手換股。**若持有期間再次符合雷達深蹲且帳面維持成本之上，自動展延 1 次至滿 7 個交易日**。")
-        st.write("• **🛡️ 防線 3【動態保本機制 (+4.0%)】**：盤中浮盈達 +4.0% 時，次個交易日起停損防線調升至成本價 (+0.2%)，消滅賺變賠。")
+        st.write("• **🛡️ 防線 3【動態保本機制 (+4.0%)】**：盤中浮盈達 +4.0% 時，次日起停損防線調升至成本價 (+0.2%)，消滅賺變賠。")
         st.write("• **🎯 防線 4【第一階段停利 (+8.0%)】**：觸及成本價 +8.0% 時，掛單賣出部位 A（50% 股數）鎖住勝果。")
         st.write("• **🏄 防線 5【第二階段波段落袋 (破 10MA)】**：剩餘部位 B 只要收盤跌破 10MA，次個交易日開盤市價出清。")
         st.write("• **❄️ 防線 6【停損冷卻機制】**：若觸發硬停損，7～10 個交易日內禁止重複買進同一檔股票。")
