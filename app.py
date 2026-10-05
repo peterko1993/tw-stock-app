@@ -234,48 +234,40 @@ tab_radar, tab_tracker, tab_batch, tab_single, tab_watchlist, tab_docs = st.tabs
     "📖 策略手冊與 SOP 指南"
 ])
 
-# ================= TAB 0: 每日雷達戰報 (支援手動即時掃描) =================
+# ================= TAB 0: 每日雷達戰報 =================
 with tab_radar:
-    # 頂部操作列：標題 + 手動掃描按鈕
     c_title, c_scan = st.columns([3, 1.3])
     with c_title:
         st.subheader("📡 全自動獵股雷達・今日盤後戰報")
     with c_scan:
         btn_manual_scan = st.button("⚡ 手動立即掃描雷達", type="primary", use_container_width=True)
 
-    # 💡 核心新增：手動執行 3-1-2 漏斗與實盤追蹤
     if btn_manual_scan:
-        with st.spinner("🚀 正在連線證交所抓取法人籌碼、股本與營收，進行 3-1-2 漏斗運算... (約需 15~20 秒)"):
+        with st.spinner("🚀 正在連線證交所進行 3-1-2 漏斗與持倉交易日校正... (約需 15~20 秒)"):
             try:
                 import screener
                 import tracker
                 importlib.reload(screener)
                 importlib.reload(tracker)
 
-                # 1. 執行雷達篩選
                 screener.run_screener()
-                # 2. 執行實盤持倉追蹤
                 tracker.run_tracker()
 
-                # 3. 自動反向同步回 GitHub
                 new_rep = load_json(REPORT_FILE, {})
-                if new_rep:
-                    save_json(REPORT_FILE, new_rep)
+                if new_rep: save_json(REPORT_FILE, new_rep)
 
                 new_pos = load_json(POSITIONS_FILE, [])
-                if new_pos:
-                    save_json(POSITIONS_FILE, new_pos)
+                if new_pos: save_json(POSITIONS_FILE, new_pos)
 
                 if os.path.exists(HISTORY_FILE):
                     with open(HISTORY_FILE, "rb") as f:
                         push_file_to_github(HISTORY_FILE, f.read())
 
-                st.success("✅ 雷達掃描與持倉結算已完成，資料已同步至 GitHub！")
+                st.success("✅ 雷達掃描與交易日持倉結算已完成，已同步至 GitHub！")
                 st.rerun()
             except Exception as e:
                 st.error(f"❌ 手動掃描異常: {e}")
 
-    # GitHub Actions 遠端備援小選單
     with st.expander("☁️ GitHub Actions 遠端開機備援", expanded=False):
         st.caption("若伺服器網路異常，可直接向 GitHub Actions 發送遠端強制開機信號：")
         if st.button("🚀 命令 GitHub Actions 立即開機掃描", key="btn_gha_dispatch"):
@@ -286,16 +278,14 @@ with tab_radar:
                 d_headers = {"Authorization": f"token {t_token}", "Accept": "application/vnd.github.v3+json"}
                 res_d = requests.post(dispatch_url, headers=d_headers, json={"ref": "main"})
                 if res_d.status_code == 204:
-                    st.success("✅ 已成功向 GitHub 發送開機指令！Actions 正在雲端運行，稍候請手動重整頁面。")
+                    st.success("✅ 已向 GitHub 發送開機指令！")
                 else:
-                    st.error(f"⚠️ 觸發失敗 ({res_d.status_code}): {res_d.text}")
-            else:
-                st.warning("尚未設定 GITHUB_TOKEN 或 GITHUB_REPO。")
+                    st.error(f"⚠️ 觸發失敗: {res_d.text}")
 
     st.write("---")
     report = load_json(REPORT_FILE, {})
     if not report:
-        st.info("💡 目前尚未有雷達報告。每日 16:30 GitHub Actions 會自動更新產出，亦可點擊上方按鈕立即掃描！")
+        st.info("💡 目前尚未有雷達報告。每日 16:30 GitHub Actions 會自動更新產出！")
     else:
         cr1, cr2, cr3 = st.columns(3)
         cr1.metric("最後掃描時間", report.get("update_time", "未知"))
@@ -350,7 +340,7 @@ with tab_radar:
         else:
             st.info("⏸ 今日籌碼與基本面強勢股尚未剛好踩在均線深蹲點，建議維持觀望。")
 
-# ================= TAB 1: 實盤追蹤與績效帳本 =================
+# ================= TAB 1: 實盤追蹤與績效帳本 (交易日天數呈現) =================
 with tab_tracker:
     st.subheader("📊 方案 B：前向實盤追蹤流水帳本 (Forward-Walk Paper Trading)")
     
@@ -375,7 +365,7 @@ with tab_tracker:
     m2.metric("已結案筆數", f"{total_trades} 筆")
     m3.metric("勝率", f"{win_rate:.1f} %")
     m4.metric("累積淨獲利", f"NT$ {int(total_pnl):+,d}")
-    m5.metric("平均持股天數", f"{avg_days:.1f} 天")
+    m5.metric("平均持股交易日", f"{avg_days:.1f} 天")
     st.divider()
 
     st.markdown("#### 🏦 【當前持倉部位即時監控・實戰下單指標】")
@@ -387,7 +377,7 @@ with tab_tracker:
             unreal_pct = float(p.get('unrealized_pct', 0.0))
             days = p.get('days_held', 0)
             
-            if p.get('is_breakeven') and days > 1:
+            if p.get('is_breakeven') and days >= 1:
                 stop_display = f"🛡️ ${entry_p * 1.002:.1f} (保本線)"
             else:
                 stop_display = f"🛑 ${entry_p * 0.96:.1f} (-4%)"
@@ -402,7 +392,8 @@ with tab_tracker:
 
             pos_display.append({
                 "標的": f"{p['name']} ({p['code']})",
-                "進場日 (天數)": f"{p['entry_date']} ({days}天)",
+                "進場日": p['entry_date'],
+                "持有開盤交易日": f"{days} 個交易日",  # 💡 明確標示交易日
                 "進場成本": f"${entry_p:.1f}",
                 "現價 (浮盈%)": f"${curr_p:.1f} ({unreal_pct:+.2f}%)",
                 "🛑 當前防守停損": stop_display,
@@ -865,12 +856,12 @@ with tab_docs:
         st.write("• **大盤多頭濾網】**：加權指數收盤必須站穩 20MA（月線）之上。若大盤處於月線反壓，全市場雷達強制休眠。")
         st.write("• **次日右側過高確認】**：訊號成立次日，盤中最高價突破深蹲日最高點才准掛單進場；未突破則一律放棄建倉。")
 
-    with st.expander("🛑 四、 嚴格五大出場紀律 SOP", expanded=True):
+    with st.expander("🛑 四、 嚴格五大出場紀律 SOP（以開盤交易日為準）", expanded=True):
         st.write("• **🛑 防線 1【硬停損線 (-4.0%)】**：跌破成本價之 -4.0%，無條件市價全數砍單。")
-        st.write("• **⏳ 防線 2【時間停損 (4天)】**：持有滿 4 天漲幅未達 +3%，第 5 天開盤平手換股。")
-        st.write("• **🛡️ 防線 3【動態保本機制 (+4.0%)】**：盤中浮盈達 +4.0% 時，次日起停損防線調升至成本價 (+0.2%)，消滅賺變賠。")
+        st.write("• **⏳ 防線 2【時間停損 (4個開盤交易日)】**：進場後持有滿 **4 個實際交易日（排除例假日）** 漲幅未達 +3%，第 5 天開盤平手換股。")
+        st.write("• **🛡️ 防線 3【動態保本機制 (+4.0%)】**：盤中浮盈達 +4.0% 時，次個交易日起停損防線調升至成本價 (+0.2%)，消滅賺變賠。")
         st.write("• **🎯 防線 4【第一階段停利 (+8.0%)】**：觸及成本價 +8.0% 時，掛單賣出部位 A（50% 股數）鎖住勝果。")
-        st.write("• **🏄 防線 5【第二階段波段落袋 (破 10MA)】**：剩餘部位 B 只要收盤跌破 10MA，次日開盤市價出清。")
+        st.write("• **🏄 防線 5【第二階段波段落袋 (破 10MA)】**：剩餘部位 B 只要收盤跌破 10MA，次個交易日開盤市價出清。")
         st.write("• **❄️ 防線 6【停損冷卻機制】**：若觸發硬停損，7～10 個交易日內禁止重複買進同一檔股票。")
 
     with st.expander("💼 五、 60 萬元資金與部位管理模型 SOP", expanded=True):
