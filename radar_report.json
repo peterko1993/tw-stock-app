@@ -1,7 +1,7 @@
 {
-  "update_time": "2026-10-05 10:19",
+  "update_time": "2026-10-05 15:01",
   "trade_date": "20261005",
-  "total_funnel": 16,
+  "total_funnel": 15,
   "total_squat": 1,
   "stocks": [
     {
@@ -45,6 +45,26 @@
       "cnyes_news": "https://invest.cnyes.com/twstock/TWS/3189/news"
     },
     {
+      "name": "南電            ",
+      "code": "8046",
+      "ticker": "8046.TW",
+      "industry": "28",
+      "cap": 64.6,
+      "cap_bracket": "64.6億 (旗艦領頭羊)",
+      "close": 1495.0,
+      "trust_buy": 883,
+      "rev_yoy": 40.6,
+      "is_squat": false,
+      "support": "無",
+      "buy_min": 1173.0,
+      "buy_max": 1495.0,
+      "stop_loss": 1126.1,
+      "take_profit": 1614.6,
+      "yahoo_news": "https://tw.stock.yahoo.com/quote/8046/news",
+      "google_news": "https://www.google.com/search?q=南電            +8046+股票&tbm=nws&tbs=qdr:m",
+      "cnyes_news": "https://invest.cnyes.com/twstock/TWS/8046/news"
+    },
+    {
       "name": "奇鋐            ",
       "code": "3017",
       "ticker": "3017.TW",
@@ -65,26 +85,6 @@
       "cnyes_news": "https://invest.cnyes.com/twstock/TWS/3017/news"
     },
     {
-      "name": "南電            ",
-      "code": "8046",
-      "ticker": "8046.TW",
-      "industry": "28",
-      "cap": 64.6,
-      "cap_bracket": "64.6億 (旗艦領頭羊)",
-      "close": 1495.0,
-      "trust_buy": 665,
-      "rev_yoy": 40.6,
-      "is_squat": false,
-      "support": "無",
-      "buy_min": 1173.0,
-      "buy_max": 1495.0,
-      "stop_loss": 1126.1,
-      "take_profit": 1614.6,
-      "yahoo_news": "https://tw.stock.yahoo.com/quote/8046/news",
-      "google_news": "https://www.google.com/search?q=南電            +8046+股票&tbm=nws&tbs=qdr:m",
-      "cnyes_news": "https://invest.cnyes.com/twstock/TWS/8046/news"
-    },
-    {
       "name": "健鼎            ",
       "code": "3044",
       "ticker": "3044.TW",
@@ -103,26 +103,6 @@
       "yahoo_news": "https://tw.stock.yahoo.com/quote/3044/news",
       "google_news": "https://www.google.com/search?q=健鼎            +3044+股票&tbm=nws&tbs=qdr:m",
       "cnyes_news": "https://invest.cnyes.com/twstock/TWS/3044/news"
-    },
-    {
-      "name": "致茂            ",
-      "code": "2360",
-      "ticker": "2360.TW",
-      "industry": "31",
-      "cap": 42.5,
-      "cap_bracket": "42.5億 (中型成長股)",
-      "close": 2325.0,
-      "trust_buy": 167,
-      "rev_yoy": 156.3,
-      "is_squat": false,
-      "support": "10MA",
-      "buy_min": 2264.0,
-      "buy_max": 2325.0,
-      "stop_loss": 2173.4,
-      "take_profit": 2511.0,
-      "yahoo_news": "https://tw.stock.yahoo.com/quote/2360/news",
-      "google_news": "https://www.google.com/search?q=致茂            +2360+股票&tbm=nws&tbs=qdr:m",
-      "cnyes_news": "https://invest.cnyes.com/twstock/TWS/2360/news"
     },
     {
       "name": "創見            ",
@@ -292,7 +272,7 @@
       "cap": 48.5,
       "cap_bracket": "48.5億 (中型成長股)",
       "close": 368.5,
-      "trust_buy": 161,
+      "trust_buy": 3126,
       "rev_yoy": 45.5,
       "is_squat": false,
       "support": "無",
