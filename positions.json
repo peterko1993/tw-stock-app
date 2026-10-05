@@ -1,26 +1,5 @@
 [
   {
-    "code": "2481",
-    "name": "強茂            ",
-    "ticker": "2481.TW",
-    "entry_date": "2026-10-01",
-    "entry_price": 177.5,
-    "total_invested": 199829.77734374997,
-    "shares_a": 562,
-    "shares_b": 563,
-    "days_held": 2,
-    "is_breakeven": true,
-    "lot_a_sold": false,
-    "lot_a_revenue": 0.0,
-    "lot_a_pnl_pct": 0.0,
-    "curr_price": 188.0,
-    "unrealized_pct": 5.92,
-    "curr_stop": 177.9,
-    "tp_stage1": 191.7,
-    "ma10": 174.2,
-    "is_extended": false
-  },
-  {
     "code": "2379",
     "name": "瑞昱            ",
     "ticker": "2379.TW",
