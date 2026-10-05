@@ -42,6 +42,11 @@ def run_tracker():
     remaining_positions = []
     new_closed_trades = []
 
+    # 取得今日雷達深蹲合格股票代號集合
+    radar_squat_codes = set()
+    if report and "stocks" in report:
+        radar_squat_codes = {str(s['code']).split('.')[0].strip() for s in report.get("stocks", []) if s.get("is_squat")}
+
     # ================= 1. 檢驗既有持倉部位 =================
     for pos in positions:
         ticker = pos['ticker']
@@ -65,10 +70,22 @@ def run_tracker():
             close = float(latest['Close'])
             ma10 = float(latest['MA10'])
             
-            # 💡【核心修正】：以台股實際開盤日 K 棒計算開盤交易日天數 (徹底排除週末與國定假日)
+            # 以台股實際開盤日 K 棒計算開盤交易日天數
             trade_dates_after = [idx.strftime('%Y-%m-%d') for idx in df.index if idx.strftime('%Y-%m-%d') > entry_d]
             d = len(trade_dates_after)
-            pos['days_held'] = d  # 自動同步校正
+            pos['days_held'] = d
+
+            # 💡【核心功能】：智慧展延檢驗
+            # 條件：今日雷達再次掃到 + 尚未被展延過 + 帳面處於非虧損狀態 (Close >= entry_p * 0.995)
+            if "is_extended" not in pos:
+                pos["is_extended"] = False
+            
+            if not pos["is_extended"] and (code in radar_squat_codes):
+                if close >= (entry_p * 0.995):  # 嚴格非虧損保護
+                    pos["is_extended"] = True
+                    print(f"   🔄 [智慧展延] {name} ({code}) 今日再次符合雷達深蹲且維持成本之上，持有天數上限放寬至 7 個交易日！")
+
+            max_allowed_days = 7 if pos.get("is_extended") else 4
 
             # (1) 停損檢驗 (動態保本線 或 -4% 硬停損)
             effective_stop = (entry_p * 1.002) if (pos.get('is_breakeven') and d >= 1) else (entry_p * 0.96)
@@ -123,21 +140,23 @@ def run_tracker():
                 print(f"   [波段出場] {name} 破 10MA 全數落袋，綜合報酬: {tot_pct:+.2f}%")
                 continue
 
-            # (5) 💡 時間停損：嚴格以「滿 4 個實際交易日且無動能」判定
-            if d >= 4 and not pos.get('lot_a_sold') and close <= entry_p * 1.03:
+            # (5) 💡 時間停損：嚴格以最大容許交易日判定（標準 4 天，展延 7 天）
+            if d >= max_allowed_days and not pos.get('lot_a_sold') and close <= entry_p * 1.03:
                 exit_p = close
                 shares_left = pos['shares_a'] + pos['shares_b']
                 rev = shares_left * exit_p * (1 - FEE_RATE - TAX_RATE)
                 pnl_amt = rev - pos['total_invested']
                 pnl_pct = (exit_p - entry_p) / entry_p * 100
+                ext_str = "展延滿7天" if pos.get("is_extended") else "滿4天"
 
                 new_closed_trades.append({
                     "代號": code, "名稱": name, "進場日": entry_d, "進場價": entry_p,
                     "出場日": today_str, "持股天數": d, "投入金額": int(pos['total_invested']),
                     "回收金額": int(rev), "淨損益(NTD)": int(pnl_amt), "部位A_損益%": round(pnl_pct, 2),
-                    "部位B_損益%": round(pnl_pct, 2), "綜合報酬率%": round(pnl_pct, 2), "出場原因": "⏳ 時間停損 (4個交易日無動能)"
+                    "部位B_損益%": round(pnl_pct, 2), "綜合報酬率%": round(pnl_pct, 2),
+                    "出場原因": f"⏳ 時間停損 ({ext_str}無動能)"
                 })
-                print(f"   [時間停損] {name} 持有滿 4 個交易日未發動，平倉離場")
+                print(f"   [時間停損] {name} 持有{ext_str}未發動，平倉離場")
                 continue
 
             pos['curr_price'] = round(close, 1)
@@ -181,7 +200,8 @@ def run_tracker():
                 "curr_price": buy_price, "unrealized_pct": 0.0,
                 "curr_stop": round(buy_price * 0.96, 1),
                 "tp_stage1": round(buy_price * 1.08, 1),
-                "ma10": round(buy_price * 0.99, 1)
+                "ma10": round(buy_price * 0.99, 1),
+                "is_extended": False
             })
             print(f"   [新開倉] 建立實盤虛擬持倉：{cand_name} ({cand_code})，買入價 ${buy_price}")
 
