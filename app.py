@@ -234,7 +234,7 @@ tab_radar, tab_tracker, tab_batch, tab_single, tab_watchlist, tab_docs = st.tabs
     "📖 策略手冊與 SOP 指南 V2.5"
 ])
 
-# ================= TAB 0: 每日雷達戰報 (支援星級共振評級) =================
+# ================= TAB 0: 每日雷達戰報 =================
 with tab_radar:
     c_title, c_scan = st.columns([3, 1.3])
     with c_title:
@@ -597,7 +597,7 @@ with tab_tracker:
     else:
         st.info("尚無結案交易紀錄，等待排程每日 16:30 自動追蹤結算，或可使用上方「手動平倉結案」自訂出場。")
 
-# ================= TAB 2: 自選名單批次體檢 (含 RSI 硬門檻與評級) =================
+# ================= TAB 2: 自選名單批次體檢 =================
 with tab_batch:
     st.subheader("📋 自選股今日深蹲訊號掃描 (升級三指標共振)")
     st.write(f"目前自選名單中共有 **{len(st.session_state.watchlist)}** 檔標的。")
@@ -625,7 +625,6 @@ with tab_batch:
                 df['VOL_MA5'] = df['Volume'].rolling(5).mean()
                 df['VOL_MA20'] = df['Volume'].rolling(20).mean()
 
-                # RSI (14)
                 delta = df['Close'].diff()
                 gain = delta.clip(lower=0)
                 loss = -delta.clip(upper=0)
@@ -634,7 +633,6 @@ with tab_batch:
                 rs = avg_gain / (avg_loss + 1e-9)
                 df['RSI14'] = 100 - (100 / (1 + rs))
 
-                # KD (9, 3, 3)
                 low9 = df['Low'].rolling(9).min()
                 high9 = df['High'].rolling(9).max()
                 rsv = (df['Close'] - low9) / (high9 - low9 + 1e-9) * 100
@@ -647,7 +645,6 @@ with tab_batch:
                 df['K'] = k_list[1:]
                 df['D'] = d_list[1:]
 
-                # MACD (12, 26, 9)
                 ema12 = df['Close'].ewm(span=12, adjust=False).mean()
                 ema26 = df['Close'].ewm(span=26, adjust=False).mean()
                 df['DIF'] = ema12 - ema26
@@ -815,7 +812,7 @@ with tab_single:
                 fig.update_layout(xaxis_rangeslider_visible=False, height=420, margin=dict(l=10, r=10, t=10, b=10))
                 st.plotly_chart(fig, use_container_width=True)
 
-# ================= TAB 5: 自選股票清單總覽 =================
+# ================= TAB 5: 自選股票清單總覽 (動能評級前置升級版) =================
 with tab_watchlist:
     st.subheader("📋 自選股票清單總覽儀表板 (Watchlist Overview)")
     
@@ -853,10 +850,10 @@ with tab_watchlist:
     if not watchlist_items:
         st.info("目前自選清單為空，可點擊上方「快速管理自選名單」或由雷達戰報加入股票。")
     else:
-        with st.spinner("正在取得自選股即時產業、規模與行情指標..."):
+        with st.spinner("正在取得自選股即時產業、規模、均線與動能指標..."):
             tickers = [t for _, t in watchlist_items]
             try:
-                df_all = yf.download(tickers, period="2mo", interval="1d", progress=False)
+                df_all = yf.download(tickers, period="4mo", interval="1d", progress=False)
             except Exception:
                 df_all = pd.DataFrame()
 
@@ -902,6 +899,7 @@ with tab_watchlist:
                     
                     ma20 = float(sub_df['Close'].rolling(20).mean().iloc[-1])
                     ma10 = float(sub_df['Close'].rolling(10).mean().iloc[-1])
+                    ma5 = float(sub_df['Close'].rolling(5).mean().iloc[-1]) if len(sub_df) >= 5 else ma10
                     vol = float(sub_df['Volume'].iloc[-1])
                     vol_ma5 = float(sub_df['Volume'].rolling(5).mean().iloc[-1])
                     
@@ -917,38 +915,113 @@ with tab_watchlist:
                     elif vol_ratio >= 1.5: vol_tag = f"🔥 出量 ({vol_ratio:.2f}x)"
                     else: vol_tag = f"⚪ 常態 ({vol_ratio:.2f}x)"
 
+                    # 💡 1. 即時計算 RSI (14)
+                    delta = sub_df['Close'].diff()
+                    gain = delta.clip(lower=0)
+                    loss = -delta.clip(upper=0)
+                    avg_gain = gain.ewm(com=13, adjust=False).mean()
+                    avg_loss = loss.ewm(com=13, adjust=False).mean()
+                    rs = avg_gain / (avg_loss + 1e-9)
+                    rsi_series = 100 - (100 / (1 + rs))
+                    rsi_val = float(rsi_series.iloc[-1])
+
+                    # 💡 2. 即時計算 KD (9, 3, 3)
+                    low9 = sub_df['Low'].rolling(9).min()
+                    high9 = sub_df['High'].rolling(9).max()
+                    rsv = (sub_df['Close'] - low9) / (high9 - low9 + 1e-9) * 100
+                    k_list, d_list = [50.0], [50.0]
+                    for r in rsv.fillna(50):
+                        new_k = (k_list[-1] * 2 / 3) + (r * 1 / 3)
+                        new_d = (d_list[-1] * 2 / 3) + (new_k * 1 / 3)
+                        k_list.append(new_k)
+                        d_list.append(new_d)
+                    k_val = float(k_list[-1])
+                    d_val = float(d_list[-1])
+                    prev_k = float(k_list[-2]) if len(k_list) >= 2 else k_val
+
+                    # 💡 3. 即時計算 MACD (12, 26, 9)
+                    ema12 = sub_df['Close'].ewm(span=12, adjust=False).mean()
+                    ema26 = sub_df['Close'].ewm(span=26, adjust=False).mean()
+                    dif_series = ema12 - ema26
+                    macd_sig = dif_series.ewm(span=9, adjust=False).mean()
+                    osc_series = dif_series - macd_sig
+                    dif_val = float(dif_series.iloc[-1])
+                    osc_val = float(osc_series.iloc[-1])
+                    prev_osc = float(osc_series.iloc[-2]) if len(osc_series) >= 2 else osc_val
+
+                    # 深蹲條件判斷
+                    open_p = float(sub_df['Open'].iloc[-1])
                     low = float(sub_df['Low'].iloc[-1])
-                    if (low <= ma10 * 1.018 and c_today >= ma10 * 0.99) and vol < vol_ma5:
+                    prev_ma20 = float(sub_df['Close'].rolling(20).mean().iloc[-4]) if len(sub_df) >= 24 else ma20
+
+                    cond_trend = (ma5 > ma10) and (ma10 > ma20) and (ma20 >= prev_ma20)
+                    touch_10 = (low <= ma10 * 1.018 and c_today >= ma10 * 0.99)
+                    touch_20 = (low <= ma20 * 1.018 and c_today >= ma20 * 0.99)
+                    cond_support = touch_10 or touch_20
+                    cond_vol = (vol < vol_ma5)
+                    cond_k = (abs(c_today - open_p) / open_p <= 0.035)
+                    cond_rsi_hard = (40.0 <= rsi_val <= 65.0)
+
+                    is_squat = cond_trend and cond_support and cond_vol and cond_k and cond_rsi_hard
+
+                    if is_squat:
                         squat_tag = "🎯 均線量縮深蹲"
-                    elif abs(c_today - ma10) / ma10 <= 0.025:
+                    elif touch_10 or touch_20 or (abs(c_today - ma10) / ma10 <= 0.025):
                         squat_tag = "⏳ 回測均線中"
                     elif c_today > ma10:
                         squat_tag = "🚀 均線上強勢"
                     else:
                         squat_tag = "🔻 均線反壓整理"
+
+                    # 💡 4. 動能共振星級評級判定 (Signal Quality)
+                    cond_macd_res = (dif_val > 0) and ((osc_val > prev_osc) or (osc_val > 0))
+                    cond_kd_res = (30.0 <= k_val <= 65.0) and ((k_val > prev_k) or (k_val >= d_val))
+
+                    if is_squat:
+                        if cond_macd_res and cond_kd_res:
+                            signal_quality = "👑 頂級共振 (S級)"
+                        elif cond_macd_res or cond_kd_res:
+                            signal_quality = "🎯 強勢動能 (A級)"
+                        else:
+                            signal_quality = "🟢 標準深蹲 (B級)"
+                    elif c_today >= ma20 and cond_trend:
+                        if cond_macd_res and cond_kd_res:
+                            signal_quality = "⚡ 多頭共振 (待深蹲)"
+                        else:
+                            signal_quality = "⚪ 多頭蓄勢 (待深蹲)"
+                    elif c_today >= ma20:
+                        signal_quality = "⚪ 區間整理"
+                    else:
+                        signal_quality = "🔻 弱勢整理"
+
                 else:
                     c_today, change_pct = 0.0, 0.0
-                    mkt_pos, vol_tag, squat_tag = "無資料", "無資料", "無資料"
+                    mkt_pos, vol_tag, squat_tag, signal_quality = "無資料", "無資料", "無資料", "無資料"
 
+                # 💡 欄位重排：將「動能共振評級」置於第 2 欄、「深蹲就緒度」順移至第 3 欄
                 overview_rows.append({
                     "標的代號": label,
-                    "產業類別": ind_text,
-                    "股本規模區間": cap_bracket_label,
+                    "動能共振評級": signal_quality,
+                    "深蹲就緒度": squat_tag,
                     "最新收盤價": f"${c_today:,.1f}" if c_today > 0 else "無資料",
                     "今日漲跌%": f"{change_pct:+.2f}%" if c_today > 0 else "-",
+                    "產業類別": ind_text,
+                    "股本規模區間": cap_bracket_label,
                     "20MA月線位階": mkt_pos,
                     "量能萎縮比 (vs 5MV)": vol_tag,
-                    "深蹲就緒度": squat_tag,
                     "code": code,
                     "name": name
                 })
 
-        c_ov1, c_ov2, c_ov3 = st.columns(3)
+        # 頂部統計指標
+        c_ov1, c_ov2, c_ov3, c_ov4 = st.columns(4)
         c_ov1.metric("自選監控總數", f"{len(overview_rows)} 檔")
         bull_pct = (bull_count / len(overview_rows) * 100) if overview_rows else 0
         c_ov2.metric("多頭站穩月線比例", f"{bull_pct:.0f} %")
         squat_ready_count = len([r for r in overview_rows if "🎯" in r["深蹲就緒度"]])
         c_ov3.metric("🎯 處於量縮深蹲點", f"{squat_ready_count} 檔")
+        s_a_count = len([r for r in overview_rows if ("S級" in r["動能共振評級"]) or ("A級" in r["動能共振評級"]) or ("多頭共振" in r["動能共振評級"])])
+        c_ov4.metric("👑 高動能共振標的", f"{s_a_count} 檔")
 
         st.write("---")
         df_display = pd.DataFrame(overview_rows).drop(columns=['code', 'name'])
