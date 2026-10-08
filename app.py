@@ -243,7 +243,6 @@ with tab_radar:
     with c_scan:
         btn_manual_scan = st.button("⚡ 手動立即掃描雷達", type="primary", use_container_width=True)
 
-    # 💡【核心修復】：先執行 tracker 結算昨日開倉，再執行 screener 產出今日新戰報！
     if btn_manual_scan:
         with st.spinner("🚀 正在檢驗昨日突破建倉，並連線證交所產出今日雷達戰報... (約需 15~20 秒)"):
             try:
@@ -252,9 +251,7 @@ with tab_radar:
                 importlib.reload(tracker)
                 importlib.reload(screener)
 
-                # 1. 先檢驗昨日待命標的突破建倉
                 tracker.run_tracker()
-                # 2. 再掃描今日新深蹲候選標的
                 screener.run_screener()
 
                 new_rep = load_json(REPORT_FILE, {})
@@ -332,7 +329,7 @@ with tab_radar:
         else:
             st.info("⏸ 今日籌碼與基本面強勢股尚未剛好踩在均線深蹲點，建議維持觀望。")
 
-# ================= TAB 1: 實盤追蹤與績效帳本 =================
+# ================= TAB 1: 實盤追蹤與績效帳本 (支援自訂實際本金與股數) =================
 with tab_tracker:
     st.subheader("📊 方案 B：前向實盤追蹤流水帳本 (Forward-Walk Paper Trading)")
     
@@ -386,11 +383,16 @@ with tab_tracker:
             ma10_val = p.get('ma10')
             ma10_display = f"🏄 ${ma10_val:.1f}" if ma10_val else "計算中"
 
+            tot_shares = p.get('shares_a', 0) + p.get('shares_b', 0)
+            tot_cost = int(p.get('total_invested', 0))
+
             pos_display.append({
                 "標的": f"{p['name']} ({p['code']})",
                 "進場日": p['entry_date'],
                 "持有交易日進度": day_str,
                 "進場成本": f"${entry_p:.1f}",
+                "持有總股數": f"{tot_shares:,d} 股",
+                "投入總本金": f"NT$ {tot_cost:,d}",
                 "現價 (浮盈%)": f"${curr_p:.1f} ({unreal_pct:+.2f}%)",
                 "🛑 當前防守停損": stop_display,
                 "🎯 階段一停利": tp1_display,
@@ -401,16 +403,25 @@ with tab_tracker:
     else:
         st.info("目前無在倉持股，現金池 100% 待命。")
 
-    # 💡【核心新增】：快速補登開倉控制台 (支援直接點擊補入超豐 / 晶技)
-    with st.expander("➕ 手動快速補登開倉（補入今日右側突破之候選標的）", expanded=True):
-        st.info("若昨日雷達掃出之標的（如超豐 2441、晶技 3042）今日盤中已確認右側突破，可在此一鍵補入持倉監控！")
+    # 💡 核心功能 A：手動快速補登開倉（支援自訂股數與實際扣款成本）
+    with st.expander("➕ 手動快速補登開倉（可自訂實際買進股數與投入金額）", expanded=True):
+        st.info("💡 在此可直接輸入真實券商對帳單的實際買進價格、實際股數與扣款總額，損益計算將 100% 精準吻合！")
         c_add1, c_add2, c_add3 = st.columns(3)
         with c_add1:
-            in_code = st.text_input("股票代號 (4碼)", value="2441", placeholder="例如：2441 或 3042")
+            in_code = st.text_input("股票代號 (4碼)", value="2441", placeholder="例如：2441 或 3042", key="in_manual_code")
         with c_add2:
-            in_buy_price = st.number_input("今日買進成本價 (NTD)", value=127.5, step=0.1)
+            in_buy_price = st.number_input("實際買進均價 (NTD)", value=127.5, step=0.1, key="in_manual_price")
         with c_add3:
-            in_entry_date = st.text_input("進場日期 (YYYY-MM-DD)", value="2026-10-08")
+            in_entry_date = st.text_input("進場日期 (YYYY-MM-DD)", value="2026-10-08", key="in_manual_date")
+
+        # 自動依 20 萬估計建議股數與預估金額
+        est_shares = int(200000.0 / (float(in_buy_price) * (1 + FEE_RATE))) if float(in_buy_price) > 0 else 1000
+        c_add4, c_add5 = st.columns(2)
+        with c_add4:
+            in_custom_shares = st.number_input("實際買進總股數 (股，可自由調整整張或零股)", value=est_shares, step=100, key="in_manual_shares")
+        with c_add5:
+            est_cost = int(float(in_custom_shares) * float(in_buy_price) * (1 + FEE_RATE))
+            in_custom_cost = st.number_input("實際投入總金額 (NTD，可填對帳單實際扣款)", value=est_cost, step=1000, key="in_manual_cost")
 
         if st.button("確認將此標的加入方案 B 在倉監控", type="primary", use_container_width=True):
             clean_c = in_code.strip()
@@ -424,10 +435,10 @@ with tab_tracker:
                 st.error("🛑 槽位已滿（上限 3 檔），無法再開新部位！")
             else:
                 b_price = float(in_buy_price)
-                tot_shares = int(200000.0 / (b_price * (1 + FEE_RATE)))
+                tot_shares = int(in_custom_shares)
+                cost = float(in_custom_cost)
                 shares_a = tot_shares // 2
                 shares_b = tot_shares - shares_a
-                cost = tot_shares * b_price * (1 + FEE_RATE)
 
                 new_pos_entry = {
                     "code": clean_c, "name": s_name, "ticker": s_ticker,
@@ -443,8 +454,44 @@ with tab_tracker:
                 }
                 positions.append(new_pos_entry)
                 save_json(POSITIONS_FILE, positions)
-                st.success(f"✅ 成功將 {s_name} ({clean_c}) 加入方案 B 在倉監控！進場日：{in_entry_date}，成本：${b_price}")
+                st.success(f"✅ 成功將 {s_name} ({clean_c}) 加入方案 B！股數：{tot_shares:,d} 股，本金：NT$ {int(cost):,d}")
                 st.rerun()
+
+    # 💡 核心功能 B：校正在倉持股資訊（可修正股數與投入金額）
+    with st.expander("✏️ 校正在倉部位資訊（修正進場日期、成本、股數或總本金）", expanded=False):
+        if positions:
+            st.info("若系統自動開倉的 20 萬與真實券商扣款金額有落差，可在此直接校正為精確數字！")
+            c_edit1, c_edit2, c_edit3 = st.columns(3)
+            with c_edit1:
+                edit_target = st.selectbox("選擇要校正的在倉股票", options=[f"{p['name']} ({p['code']})" for p in positions], key="sel_edit_pos")
+                edit_pos = next((p for p in positions if f"{p['name']} ({p['code']})" == edit_target), None)
+            with c_edit2:
+                default_ed = edit_pos['entry_date'] if edit_pos else "2026-10-08"
+                new_entry_date = st.text_input("修正進場日期 (YYYY-MM-DD)", value=default_ed, key="in_edit_date")
+            with c_edit3:
+                default_ep = float(edit_pos['entry_price']) if edit_pos else 100.0
+                new_entry_price = st.number_input("修正買進均價 (NTD)", value=default_ep, step=0.1, key="in_edit_price")
+
+            c_edit4, c_edit5 = st.columns(2)
+            with c_edit4:
+                curr_tot_shares = int(edit_pos['shares_a'] + edit_pos['shares_b']) if edit_pos else 1000
+                new_shares = st.number_input("修正買進總股數 (股)", value=curr_tot_shares, step=100, key="in_edit_shares")
+            with c_edit5:
+                curr_tot_cost = int(edit_pos.get('total_invested', 200000)) if edit_pos else 200000
+                new_cost = st.number_input("修正實際投入總金額 (NTD，含手續費)", value=curr_tot_cost, step=1000, key="in_edit_cost")
+                
+            if st.button("確認儲存校正數值", key="btn_save_edit", type="primary", use_container_width=True):
+                if edit_pos:
+                    edit_pos['entry_date'] = new_entry_date.strip()
+                    edit_pos['entry_price'] = float(new_entry_price)
+                    edit_pos['shares_a'] = int(new_shares) // 2
+                    edit_pos['shares_b'] = int(new_shares) - edit_pos['shares_a']
+                    edit_pos['total_invested'] = float(new_cost)
+                    edit_pos['curr_stop'] = round(float(new_entry_price) * 0.96, 1)
+                    edit_pos['tp_stage1'] = round(float(new_entry_price) * 1.08, 1)
+                    save_json(POSITIONS_FILE, positions)
+                    st.success(f"✅ 已成功將 {edit_target} 校正！總股數：{int(new_shares):,d} 股，實際本金：NT$ {int(new_cost):,d}！")
+                    st.rerun()
 
     # 手動平倉結案
     with st.expander("🎯 手動平倉結案（自訂出場價記帳至歷史明細）", expanded=False):
@@ -499,32 +546,6 @@ with tab_tracker:
                     positions = [p for p in positions if f"{p['name']} ({p['code']})" != target_to_close]
                     save_json(POSITIONS_FILE, positions)
                     st.success(f"✅ 已成功平倉 {target_to_close}！損益：NT$ {int(net_pnl):+,d} ({tot_roi:+.2f}%)！")
-                    st.rerun()
-
-    # 校正在倉持股資訊
-    with st.expander("✏️ 校正在倉部位資訊（修正進場日期或買進成本）", expanded=False):
-        if positions:
-            c_edit1, c_edit2, c_edit3 = st.columns(3)
-            with c_edit1:
-                edit_target = st.selectbox("選擇要校正的在倉股票", options=[f"{p['name']} ({p['code']})" for p in positions], key="sel_edit_pos")
-                edit_pos = next((p for p in positions if f"{p['name']} ({p['code']})" == edit_target), None)
-            with c_edit2:
-                default_ed = edit_pos['entry_date'] if edit_pos else "2026-10-08"
-                new_entry_date = st.text_input("修正後的進場日期 (YYYY-MM-DD)", value=default_ed, key="in_edit_date")
-            with c_edit3:
-                default_ep = float(edit_pos['entry_price']) if edit_pos else 100.0
-                new_entry_price = st.number_input("修正後的進場成本價", value=default_ep, step=0.1, key="in_edit_price")
-                
-            if st.button("確認儲存校正數值", key="btn_save_edit", type="primary", use_container_width=True):
-                if edit_pos:
-                    edit_pos['entry_date'] = new_entry_date.strip()
-                    edit_pos['entry_price'] = float(new_entry_price)
-                    edit_pos['curr_stop'] = round(float(new_entry_price) * 0.96, 1)
-                    edit_pos['tp_stage1'] = round(float(new_entry_price) * 1.08, 1)
-                    tot_shares = edit_pos['shares_a'] + edit_pos['shares_b']
-                    edit_pos['total_invested'] = tot_shares * float(new_entry_price) * (1 + FEE_RATE)
-                    save_json(POSITIONS_FILE, positions)
-                    st.success(f"✅ 已成功將 {edit_target} 校正為進場日 {new_entry_date}、成本 ${new_entry_price}！")
                     st.rerun()
 
     # 丟棄誤入持倉
