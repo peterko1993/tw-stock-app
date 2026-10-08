@@ -16,6 +16,7 @@ WATCHLIST_FILE = "watchlist.json"
 REPORT_FILE = "radar_report.json"
 POSITIONS_FILE = "positions.json"
 HISTORY_FILE = "trade_history.csv"
+PENDING_FILE = "pending_orders.json"
 
 FEE_RATE = 0.001425 * 0.5
 TAX_RATE = 0.003
@@ -242,16 +243,19 @@ with tab_radar:
     with c_scan:
         btn_manual_scan = st.button("⚡ 手動立即掃描雷達", type="primary", use_container_width=True)
 
+    # 💡【核心修復】：先執行 tracker 結算昨日開倉，再執行 screener 產出今日新戰報！
     if btn_manual_scan:
-        with st.spinner("🚀 正在連線證交所進行 3-1-2 漏斗與三指標共振檢驗... (約需 15~20 秒)"):
+        with st.spinner("🚀 正在檢驗昨日突破建倉，並連線證交所產出今日雷達戰報... (約需 15~20 秒)"):
             try:
-                import screener
                 import tracker
-                importlib.reload(screener)
+                import screener
                 importlib.reload(tracker)
+                importlib.reload(screener)
 
-                screener.run_screener()
+                # 1. 先檢驗昨日待命標的突破建倉
                 tracker.run_tracker()
+                # 2. 再掃描今日新深蹲候選標的
+                screener.run_screener()
 
                 new_rep = load_json(REPORT_FILE, {})
                 if new_rep: save_json(REPORT_FILE, new_rep)
@@ -263,24 +267,10 @@ with tab_radar:
                     with open(HISTORY_FILE, "rb") as f:
                         push_file_to_github(HISTORY_FILE, f.read())
 
-                st.success("✅ 雷達掃描與星級動能評級已完成，已同步至 GitHub！")
+                st.success("✅ 昨日突破建倉結算與今日雷達掃描已完成，已同步至 GitHub！")
                 st.rerun()
             except Exception as e:
                 st.error(f"❌ 手動掃描異常: {e}")
-
-    with st.expander("☁️ GitHub Actions 遠端開機備援", expanded=False):
-        st.caption("若伺服器網路異常，可直接向 GitHub Actions 發送遠端強制開機信號：")
-        if st.button("🚀 命令 GitHub Actions 立即開機掃描", key="btn_gha_dispatch"):
-            if "GITHUB_TOKEN" in st.secrets and "GITHUB_REPO" in st.secrets:
-                t_token = st.secrets["GITHUB_TOKEN"]
-                t_repo = st.secrets["GITHUB_REPO"]
-                dispatch_url = f"https://api.github.com/repos/{t_repo}/actions/workflows/auto_scan.yml/dispatches"
-                d_headers = {"Authorization": f"token {t_token}", "Accept": "application/vnd.github.v3+json"}
-                res_d = requests.post(dispatch_url, headers=d_headers, json={"ref": "main"})
-                if res_d.status_code == 204:
-                    st.success("✅ 已向 GitHub 發送開機指令！")
-                else:
-                    st.error(f"⚠️ 觸發失敗: {res_d.text}")
 
     st.write("---")
     report = load_json(REPORT_FILE, {})
@@ -408,9 +398,58 @@ with tab_tracker:
                 "持倉狀態": "半倉續抱守10MA" if p.get('lot_a_sold') else ("保本防護中" if p.get('is_breakeven') else "持倉中")
             })
         st.dataframe(pd.DataFrame(pos_display), use_container_width=True, hide_index=True)
-        
-        with st.expander("🎯 手動平倉結案（自訂出場價記帳至歷史明細）", expanded=False):
-            st.info("若你已在券商帳戶實際出清該檔股票，可在此填寫賣出價，系統將自動計算損益並歸檔至歷史結案帳本！")
+    else:
+        st.info("目前無在倉持股，現金池 100% 待命。")
+
+    # 💡【核心新增】：快速補登開倉控制台 (支援直接點擊補入超豐 / 晶技)
+    with st.expander("➕ 手動快速補登開倉（補入今日右側突破之候選標的）", expanded=True):
+        st.info("若昨日雷達掃出之標的（如超豐 2441、晶技 3042）今日盤中已確認右側突破，可在此一鍵補入持倉監控！")
+        c_add1, c_add2, c_add3 = st.columns(3)
+        with c_add1:
+            in_code = st.text_input("股票代號 (4碼)", value="2441", placeholder="例如：2441 或 3042")
+        with c_add2:
+            in_buy_price = st.number_input("今日買進成本價 (NTD)", value=127.5, step=0.1)
+        with c_add3:
+            in_entry_date = st.text_input("進場日期 (YYYY-MM-DD)", value="2026-10-08")
+
+        if st.button("確認將此標的加入方案 B 在倉監控", type="primary", use_container_width=True):
+            clean_c = in_code.strip()
+            stock_info, _ = resolve_taiwan_stock(clean_c)
+            s_name = stock_info['name'] if stock_info else clean_c
+            s_ticker = f"{clean_c}{stock_info['market']}" if stock_info else f"{clean_c}.TW"
+
+            if any(str(p['code']).split('.')[0].strip() == clean_c for p in positions):
+                st.warning(f"⚠️ 在倉中已有 {clean_c}，無需重複加入！")
+            elif len(positions) >= 3:
+                st.error("🛑 槽位已滿（上限 3 檔），無法再開新部位！")
+            else:
+                b_price = float(in_buy_price)
+                tot_shares = int(200000.0 / (b_price * (1 + FEE_RATE)))
+                shares_a = tot_shares // 2
+                shares_b = tot_shares - shares_a
+                cost = tot_shares * b_price * (1 + FEE_RATE)
+
+                new_pos_entry = {
+                    "code": clean_c, "name": s_name, "ticker": s_ticker,
+                    "entry_date": in_entry_date.strip(),
+                    "entry_price": b_price, "total_invested": cost,
+                    "shares_a": shares_a, "shares_b": shares_b,
+                    "days_held": 0, "is_breakeven": False, "lot_a_sold": False,
+                    "lot_a_revenue": 0.0, "lot_a_pnl_pct": 0.0,
+                    "curr_price": b_price, "unrealized_pct": 0.0,
+                    "curr_stop": round(b_price * 0.96, 1),
+                    "tp_stage1": round(b_price * 1.08, 1),
+                    "ma10": round(b_price * 0.99, 1), "is_extended": False
+                }
+                positions.append(new_pos_entry)
+                save_json(POSITIONS_FILE, positions)
+                st.success(f"✅ 成功將 {s_name} ({clean_c}) 加入方案 B 在倉監控！進場日：{in_entry_date}，成本：${b_price}")
+                st.rerun()
+
+    # 手動平倉結案
+    with st.expander("🎯 手動平倉結案（自訂出場價記帳至歷史明細）", expanded=False):
+        st.info("若你已在券商帳戶實際出清該檔股票，可在此填寫賣出價，系統將自動計算損益並歸檔至歷史結案帳本！")
+        if positions:
             c_close1, c_close2, c_close3 = st.columns(3)
             with c_close1:
                 target_to_close = st.selectbox("選擇要結案平倉的在倉標的", options=[f"{p['name']} ({p['code']})" for p in positions], key="sel_close_pos")
@@ -462,14 +501,15 @@ with tab_tracker:
                     st.success(f"✅ 已成功平倉 {target_to_close}！損益：NT$ {int(net_pnl):+,d} ({tot_roi:+.2f}%)！")
                     st.rerun()
 
-        with st.expander("✏️ 校正在倉部位資訊（修正進場日期或買進成本）", expanded=False):
-            st.info("若系統進場日提前了一天，或成本價與券商實際成交價有微幅落差，可在此直接校正！")
+    # 校正在倉持股資訊
+    with st.expander("✏️ 校正在倉部位資訊（修正進場日期或買進成本）", expanded=False):
+        if positions:
             c_edit1, c_edit2, c_edit3 = st.columns(3)
             with c_edit1:
                 edit_target = st.selectbox("選擇要校正的在倉股票", options=[f"{p['name']} ({p['code']})" for p in positions], key="sel_edit_pos")
                 edit_pos = next((p for p in positions if f"{p['name']} ({p['code']})" == edit_target), None)
             with c_edit2:
-                default_ed = edit_pos['entry_date'] if edit_pos else "2026-10-01"
+                default_ed = edit_pos['entry_date'] if edit_pos else "2026-10-08"
                 new_entry_date = st.text_input("修正後的進場日期 (YYYY-MM-DD)", value=default_ed, key="in_edit_date")
             with c_edit3:
                 default_ep = float(edit_pos['entry_price']) if edit_pos else 100.0
@@ -487,115 +527,22 @@ with tab_tracker:
                     st.success(f"✅ 已成功將 {edit_target} 校正為進場日 {new_entry_date}、成本 ${new_entry_price}！")
                     st.rerun()
 
-        with st.expander("🗑️ 手動刪除未建倉或誤入之虛擬部位 (不計入歷史損益)", expanded=False):
-            st.warning("若你在真實帳戶中並未買進該檔股票，可在此直接剔除（不會產生損益紀錄）。")
+    # 丟棄誤入持倉
+    with st.expander("🗑️ 手動刪除未建倉或誤入之虛擬部位 (不計入歷史損益)", expanded=False):
+        if positions:
             del_pos_target = st.selectbox("選擇要丟棄的虛擬部位", options=[f"{p['name']} ({p['code']})" for p in positions], key="sel_discard_pos")
             if st.button("確認刪除此持倉紀錄", type="secondary"):
                 positions = [p for p in positions if f"{p['name']} ({p['code']})" != del_pos_target]
                 save_json(POSITIONS_FILE, positions)
                 st.success(f"已從帳本中刪除 {del_pos_target}！")
                 st.rerun()
-    else:
-        st.info("目前無在倉持股，現金池 100% 待命。")
 
     st.write("---")
-    
-    # 一鍵撤回誤結案紀錄
-    if not df_history.empty:
-        with st.expander("🔄 誤結案一鍵還原（撤回歷史紀錄並重返在倉監控）", expanded=False):
-            st.info("若某筆交易因例假日計算或手滑被誤判定出場，可在此撤回結案紀錄，將其原樣恢復至在倉監控！")
-            hist_options = [f"第{i+1}筆：{r['名稱']} ({r['代號']}) - 進場日:{r['進場日']} - 損益:{r['綜合報酬率%']}%" for i, r in df_history.iterrows()]
-            sel_hist_item = st.selectbox("選擇要還原的歷史結案記錄", options=hist_options, key="sel_hist_restore")
-            sel_idx = hist_options.index(sel_hist_item)
-            cand_row = df_history.iloc[sel_idx]
-            
-            cand_code = str(cand_row['代號']).split('.')[0].strip()
-            already_active = any(str(p['code']).split('.')[0].strip() == cand_code for p in positions)
-            
-            c_r1, c_r2 = st.columns(2)
-            with c_r1:
-                default_target_date = str(cand_row['進場日']).strip()
-                restored_entry_d = st.text_input("指定還原後的正確進場日", value=default_target_date, key="in_rest_d")
-            with c_r2:
-                restored_entry_p = st.number_input("指定還原後的進場成本價", value=float(cand_row['進場價']), step=0.1, key="in_rest_p")
-                
-            if already_active:
-                st.warning(f"⚠️ 注意：目前在倉已有 {cand_row['名稱']} ({cand_code})。執行還原將會直接覆蓋，並校正為進場日 {restored_entry_d}！")
-            
-            c_btn_res, c_btn_clean = st.columns(2)
-            with c_btn_res:
-                if st.button("確認撤回此筆歷史紀錄並恢復持倉", type="primary", use_container_width=True):
-                    ticker = f"{cand_code}.TW"
-                    for _, t in st.session_state.watchlist.items():
-                        if cand_code in t: ticker = t; break
-                        
-                    entry_p = float(restored_entry_p)
-                    cost = float(cand_row['投入金額']) if cand_row['投入金額'] > 0 else 200000.0
-                    tot_shares = int(cost / (entry_p * (1 + FEE_RATE)))
-                    shares_a = tot_shares // 2
-                    shares_b = tot_shares - shares_a
-                    
-                    restored_pos = {
-                        "code": cand_code, "name": cand_row['名稱'], "ticker": ticker,
-                        "entry_date": restored_entry_d.strip(), "entry_price": entry_p,
-                        "total_invested": cost, "shares_a": shares_a, "shares_b": shares_b,
-                        "days_held": 2, "is_breakeven": False, "lot_a_sold": False,
-                        "lot_a_revenue": 0.0, "lot_a_pnl_pct": 0.0, "curr_price": entry_p,
-                        "unrealized_pct": 0.0, "curr_stop": round(entry_p * 0.96, 1),
-                        "tp_stage1": round(entry_p * 1.08, 1), "ma10": round(entry_p * 0.99, 1),
-                        "is_extended": False
-                    }
-                    
-                    positions = [p for p in positions if str(p['code']).split('.')[0].strip() != cand_code]
-                    positions.append(restored_pos)
-                    save_json(POSITIONS_FILE, positions)
-                    
-                    cand_entry_raw = str(cand_row['進場日']).strip()
-                    df_history = df_history[~((df_history['代號'].astype(str).str.split('.').str[0].str.strip() == cand_code) & 
-                                              (df_history['進場日'].astype(str).str.strip() == cand_entry_raw))].reset_index(drop=True)
-                    save_history_csv(df_history)
-                    st.success(f"✅ 已成功將 {cand_row['名稱']} ({cand_code}) 撤銷結案，並恢復至進場日 {restored_entry_d}！")
-                    st.rerun()
-
-            with c_btn_clean:
-                if st.button("🗑️ 僅從歷史明細刪除此紀錄 (不恢復持倉)", type="secondary", use_container_width=True):
-                    cand_entry_raw = str(cand_row['進場日']).strip()
-                    df_history = df_history[~((df_history['代號'].astype(str).str.split('.').str[0].str.strip() == cand_code) & 
-                                              (df_history['進場日'].astype(str).str.strip() == cand_entry_raw))].reset_index(drop=True)
-                    save_history_csv(df_history)
-                    st.success(f"✅ 已從歷史明細表中刪除 {cand_row['名稱']}！")
-                    st.rerun()
-
     st.markdown("#### 📋 【歷史結案明細表】")
     if not df_history.empty:
         st.dataframe(df_history, use_container_width=True, hide_index=True)
-        st.markdown("#### 📈 【實盤績效視覺化儀表板】")
-        fig = make_subplots(
-            rows=2, cols=2,
-            subplot_titles=("累積淨利潤走勢 (TWD)", "SOP 出場原因結構佔比", "每筆交易損益率與持股日數", "階段一 vs. 階段二損益對照"),
-            specs=[[{"type": "xy"}, {"type": "domain"}], [{"type": "xy"}, {"type": "xy"}]]
-        )
-
-        cum_pnl = df_history['淨損益(NTD)'].cumsum()
-        fig.add_trace(go.Scatter(y=cum_pnl, mode='lines+markers', line=dict(color='#2ca02c', width=2.5), name="累積利潤"), row=1, col=1)
-
-        pie_data = df_history['出場原因'].value_counts()
-        fig.add_trace(go.Pie(labels=pie_data.index, values=pie_data.values, hole=0.4), row=1, col=2)
-
-        colors = ['#2ca02c' if x > 0 else '#d62728' for x in df_history['綜合報酬率%']]
-        fig.add_trace(go.Bar(
-            y=df_history['綜合報酬率%'], marker_color=colors,
-            text=[f"{p:+.1f}% ({d}天)" for p, d in zip(df_history['綜合報酬率%'], df_history['持股天數'])],
-            textposition='auto', name="綜合損益%"
-        ), row=2, col=1)
-
-        fig.add_trace(go.Bar(name='部位A (半倉+8%)', y=df_history['部位A_損益%'], marker_color='#1f77b4'), row=2, col=2)
-        fig.add_trace(go.Bar(name='部位B (波段10MA)', y=df_history['部位B_損益%'], marker_color='#ff7f0e'), row=2, col=2)
-
-        fig.update_layout(height=650, showlegend=False, margin=dict(l=10, r=10, t=30, b=10))
-        st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("尚無結案交易紀錄，等待排程每日 16:30 自動追蹤結算，或可使用上方「手動平倉結案」自訂出場。")
+        st.info("尚無結案交易紀錄，等待排程每日 16:30 自動追蹤結算。")
 
 # ================= TAB 2: 自選名單批次體檢 =================
 with tab_batch:
@@ -603,9 +550,6 @@ with tab_batch:
     st.write(f"目前自選名單中共有 **{len(st.session_state.watchlist)}** 檔標的。")
     
     if st.button("⚡ 開始全自選股技術體檢", type="primary", use_container_width=True):
-        if not is_bull and use_market_filter:
-            st.warning("⚠️ 提醒：目前大盤偏弱，即使自選股出現訊號，也請控制部位（建議至多單筆 10~12 萬）。")
-            
         progress_text = st.empty()
         progress_bar = st.progress(0)
         triggered_list, waiting_list = [], []
@@ -654,11 +598,9 @@ with tab_batch:
                 now_t = datetime.datetime.now().time()
                 is_trading_hours = (datetime.time(9, 0) <= now_t <= datetime.time(13, 35))
                 if is_trading_hours and len(df) >= 2:
-                    latest = df.iloc[-2]
-                    prev = df.iloc[-3]
+                    latest, prev = df.iloc[-2], df.iloc[-3]
                 else:
-                    latest = df.iloc[-1]
-                    prev = df.iloc[-2]
+                    latest, prev = df.iloc[-1], df.iloc[-2]
 
                 close, vol, low, high, open_p = float(latest['Close']), float(latest['Volume']), float(latest['Low']), float(latest['High']), float(latest['Open'])
                 ma5, ma10, ma20 = float(latest['MA5']), float(latest['MA10']), float(latest['MA20'])
@@ -691,11 +633,8 @@ with tab_batch:
                     tp_p = right_trigger * (1 + take_profit_pct / 100)
                     
                     triggered_list.append({
-                        "股票標的": label,
-                        "動能評級": badge,
-                        "最新收盤": f"${close:,.1f}",
-                        "RSI (14)": f"{rsi_val:.1f}",
-                        "回踩均線": support_name,
+                        "股票標的": label, "動能評級": badge, "最新收盤": f"${close:,.1f}",
+                        "RSI (14)": f"{rsi_val:.1f}", "回踩均線": support_name,
                         "🎯 明日確認進場": f"突破 ${right_trigger:,.1f}",
                         f"硬停損 (-{stop_loss_pct}%)": f"${sl_p:,.1f}",
                         f"階段一停利 (+{take_profit_pct}%)": f"${tp_p:,.1f}",
@@ -766,10 +705,8 @@ with tab_single:
 
                 now_t = datetime.datetime.now().time()
                 is_trading_hours = (datetime.time(9, 0) <= now_t <= datetime.time(13, 35))
-                if is_trading_hours and len(df) >= 2:
-                    latest = df.iloc[-2]
-                else:
-                    latest = df.iloc[-1]
+                if is_trading_hours and len(df) >= 2: latest = df.iloc[-2]
+                else: latest = df.iloc[-1]
 
                 close, vol, low, high, open_p = float(latest['Close']), float(latest['Volume']), float(latest['Low']), float(latest['High']), float(latest['Open'])
                 ma5, ma10, ma20 = float(latest['MA5']), float(latest['MA10']), float(latest['MA20'])
@@ -812,7 +749,7 @@ with tab_single:
                 fig.update_layout(xaxis_rangeslider_visible=False, height=420, margin=dict(l=10, r=10, t=10, b=10))
                 st.plotly_chart(fig, use_container_width=True)
 
-# ================= TAB 5: 自選股票清單總覽 (動能評級前置升級版) =================
+# ================= TAB 5: 自選股票清單總覽 =================
 with tab_watchlist:
     st.subheader("📋 自選股票清單總覽儀表板 (Watchlist Overview)")
     
@@ -915,7 +852,6 @@ with tab_watchlist:
                     elif vol_ratio >= 1.5: vol_tag = f"🔥 出量 ({vol_ratio:.2f}x)"
                     else: vol_tag = f"⚪ 常態 ({vol_ratio:.2f}x)"
 
-                    # 💡 1. 即時計算 RSI (14)
                     delta = sub_df['Close'].diff()
                     gain = delta.clip(lower=0)
                     loss = -delta.clip(upper=0)
@@ -925,7 +861,6 @@ with tab_watchlist:
                     rsi_series = 100 - (100 / (1 + rs))
                     rsi_val = float(rsi_series.iloc[-1])
 
-                    # 💡 2. 即時計算 KD (9, 3, 3)
                     low9 = sub_df['Low'].rolling(9).min()
                     high9 = sub_df['High'].rolling(9).max()
                     rsv = (sub_df['Close'] - low9) / (high9 - low9 + 1e-9) * 100
@@ -939,7 +874,6 @@ with tab_watchlist:
                     d_val = float(d_list[-1])
                     prev_k = float(k_list[-2]) if len(k_list) >= 2 else k_val
 
-                    # 💡 3. 即時計算 MACD (12, 26, 9)
                     ema12 = sub_df['Close'].ewm(span=12, adjust=False).mean()
                     ema26 = sub_df['Close'].ewm(span=26, adjust=False).mean()
                     dif_series = ema12 - ema26
@@ -949,7 +883,6 @@ with tab_watchlist:
                     osc_val = float(osc_series.iloc[-1])
                     prev_osc = float(osc_series.iloc[-2]) if len(osc_series) >= 2 else osc_val
 
-                    # 深蹲條件判斷
                     open_p = float(sub_df['Open'].iloc[-1])
                     low = float(sub_df['Low'].iloc[-1])
                     prev_ma20 = float(sub_df['Close'].rolling(20).mean().iloc[-4]) if len(sub_df) >= 24 else ma20
@@ -964,41 +897,28 @@ with tab_watchlist:
 
                     is_squat = cond_trend and cond_support and cond_vol and cond_k and cond_rsi_hard
 
-                    if is_squat:
-                        squat_tag = "🎯 均線量縮深蹲"
-                    elif touch_10 or touch_20 or (abs(c_today - ma10) / ma10 <= 0.025):
-                        squat_tag = "⏳ 回測均線中"
-                    elif c_today > ma10:
-                        squat_tag = "🚀 均線上強勢"
-                    else:
-                        squat_tag = "🔻 均線反壓整理"
+                    if is_squat: squat_tag = "🎯 均線量縮深蹲"
+                    elif touch_10 or touch_20 or (abs(c_today - ma10) / ma10 <= 0.025): squat_tag = "⏳ 回測均線中"
+                    elif c_today > ma10: squat_tag = "🚀 均線上強勢"
+                    else: squat_tag = "🔻 均線反壓整理"
 
-                    # 💡 4. 動能共振星級評級判定 (Signal Quality)
                     cond_macd_res = (dif_val > 0) and ((osc_val > prev_osc) or (osc_val > 0))
                     cond_kd_res = (30.0 <= k_val <= 65.0) and ((k_val > prev_k) or (k_val >= d_val))
 
                     if is_squat:
-                        if cond_macd_res and cond_kd_res:
-                            signal_quality = "👑 頂級共振 (S級)"
-                        elif cond_macd_res or cond_kd_res:
-                            signal_quality = "🎯 強勢動能 (A級)"
-                        else:
-                            signal_quality = "🟢 標準深蹲 (B級)"
+                        if cond_macd_res and cond_kd_res: signal_quality = "👑 頂級共振 (S級)"
+                        elif cond_macd_res or cond_kd_res: signal_quality = "🎯 強勢動能 (A級)"
+                        else: signal_quality = "🟢 標準深蹲 (B級)"
                     elif c_today >= ma20 and cond_trend:
-                        if cond_macd_res and cond_kd_res:
-                            signal_quality = "⚡ 多頭共振 (待深蹲)"
-                        else:
-                            signal_quality = "⚪ 多頭蓄勢 (待深蹲)"
-                    elif c_today >= ma20:
-                        signal_quality = "⚪ 區間整理"
-                    else:
-                        signal_quality = "🔻 弱勢整理"
+                        if cond_macd_res and cond_kd_res: signal_quality = "⚡ 多頭共振 (待深蹲)"
+                        else: signal_quality = "⚪ 多頭蓄勢 (待深蹲)"
+                    elif c_today >= ma20: signal_quality = "⚪ 區間整理"
+                    else: signal_quality = "🔻 弱勢整理"
 
                 else:
                     c_today, change_pct = 0.0, 0.0
                     mkt_pos, vol_tag, squat_tag, signal_quality = "無資料", "無資料", "無資料", "無資料"
 
-                # 💡 欄位重排：將「動能共振評級」置於第 2 欄、「深蹲就緒度」順移至第 3 欄
                 overview_rows.append({
                     "標的代號": label,
                     "動能共振評級": signal_quality,
@@ -1013,7 +933,6 @@ with tab_watchlist:
                     "name": name
                 })
 
-        # 頂部統計指標
         c_ov1, c_ov2, c_ov3, c_ov4 = st.columns(4)
         c_ov1.metric("自選監控總數", f"{len(overview_rows)} 檔")
         bull_pct = (bull_count / len(overview_rows) * 100) if overview_rows else 0
