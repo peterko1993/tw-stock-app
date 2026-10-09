@@ -40,5 +40,26 @@
     "tp_stage1": 137.7,
     "ma10": 125.2,
     "is_extended": false
+  },
+  {
+    "code": "3042",
+    "name": "晶技            ",
+    "ticker": "3042.TW",
+    "entry_date": "2026-10-09",
+    "entry_price": 215.0,
+    "total_invested": 199877.3111875,
+    "shares_a": 464,
+    "shares_b": 465,
+    "days_held": 0,
+    "is_breakeven": false,
+    "lot_a_sold": false,
+    "lot_a_revenue": 0.0,
+    "lot_a_pnl_pct": 0.0,
+    "curr_price": 211.0,
+    "unrealized_pct": -1.86,
+    "curr_stop": 206.4,
+    "tp_stage1": 232.2,
+    "ma10": 212.8,
+    "is_extended": false
   }
 ]
