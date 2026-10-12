@@ -13,11 +13,11 @@
     "lot_a_sold": false,
     "lot_a_revenue": 0.0,
     "lot_a_pnl_pct": 0.0,
-    "curr_price": 130.0,
-    "unrealized_pct": 1.96,
+    "curr_price": NaN,
+    "unrealized_pct": NaN,
     "curr_stop": 122.4,
     "tp_stage1": 137.7,
-    "ma10": 125.7,
+    "ma10": NaN,
     "is_extended": false
   }
 ]
