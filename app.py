@@ -329,7 +329,7 @@ with tab_radar:
         else:
             st.info("⏸ 今日籌碼與基本面強勢股尚未剛好踩在均線深蹲點，建議維持觀望。")
 
-# ================= TAB 1: 實盤追蹤與績效帳本 (支援自訂實際本金與股數) =================
+# ================= TAB 1: 實盤追蹤與績效帳本 =================
 with tab_tracker:
     st.subheader("📊 方案 B：前向實盤追蹤流水帳本 (Forward-Walk Paper Trading)")
     
@@ -403,7 +403,7 @@ with tab_tracker:
     else:
         st.info("目前無在倉持股，現金池 100% 待命。")
 
-    # 💡 核心功能 A：手動快速補登開倉（支援自訂股數與實際扣款成本）
+    # 1. 手動快速補登開倉
     with st.expander("➕ 手動快速補登開倉（可自訂實際買進股數與投入金額）", expanded=True):
         st.info("💡 在此可直接輸入真實券商對帳單的實際買進價格、實際股數與扣款總額，損益計算將 100% 精準吻合！")
         c_add1, c_add2, c_add3 = st.columns(3)
@@ -414,7 +414,6 @@ with tab_tracker:
         with c_add3:
             in_entry_date = st.text_input("進場日期 (YYYY-MM-DD)", value="2026-10-08", key="in_manual_date")
 
-        # 自動依 20 萬估計建議股數與預估金額
         est_shares = int(200000.0 / (float(in_buy_price) * (1 + FEE_RATE))) if float(in_buy_price) > 0 else 1000
         c_add4, c_add5 = st.columns(2)
         with c_add4:
@@ -457,7 +456,7 @@ with tab_tracker:
                 st.success(f"✅ 成功將 {s_name} ({clean_c}) 加入方案 B！股數：{tot_shares:,d} 股，本金：NT$ {int(cost):,d}")
                 st.rerun()
 
-    # 💡 核心功能 B：校正在倉持股資訊（可修正股數與投入金額）
+    # 2. 校正在倉持股資訊
     with st.expander("✏️ 校正在倉部位資訊（修正進場日期、成本、股數或總本金）", expanded=False):
         if positions:
             st.info("若系統自動開倉的 20 萬與真實券商扣款金額有落差，可在此直接校正為精確數字！")
@@ -493,7 +492,7 @@ with tab_tracker:
                     st.success(f"✅ 已成功將 {edit_target} 校正！總股數：{int(new_shares):,d} 股，實際本金：NT$ {int(new_cost):,d}！")
                     st.rerun()
 
-    # 手動平倉結案
+    # 3. 手動平倉結案
     with st.expander("🎯 手動平倉結案（自訂出場價記帳至歷史明細）", expanded=False):
         st.info("若你已在券商帳戶實際出清該檔股票，可在此填寫賣出價，系統將自動計算損益並歸檔至歷史結案帳本！")
         if positions:
@@ -548,7 +547,7 @@ with tab_tracker:
                     st.success(f"✅ 已成功平倉 {target_to_close}！損益：NT$ {int(net_pnl):+,d} ({tot_roi:+.2f}%)！")
                     st.rerun()
 
-    # 丟棄誤入持倉
+    # 4. 丟棄誤入持倉
     with st.expander("🗑️ 手動刪除未建倉或誤入之虛擬部位 (不計入歷史損益)", expanded=False):
         if positions:
             del_pos_target = st.selectbox("選擇要丟棄的虛擬部位", options=[f"{p['name']} ({p['code']})" for p in positions], key="sel_discard_pos")
@@ -557,6 +556,72 @@ with tab_tracker:
                 save_json(POSITIONS_FILE, positions)
                 st.success(f"已從帳本中刪除 {del_pos_target}！")
                 st.rerun()
+
+    # 5. 💡【重新整合】：誤結案一鍵還原控制台
+    if not df_history.empty:
+        with st.expander("🔄 誤結案一鍵還原（撤回歷史紀錄並重返在倉監控）", expanded=True):
+            st.info("若某筆交易因盤中早盤低點或誤觸停損出場，可在此撤回結案紀錄，恢復至在倉監控！")
+            hist_options = [f"第{i+1}筆：{r['名稱']} ({r['代號']}) - 進場日:{r['進場日']} - 損益:{r['綜合報酬率%']}%" for i, r in df_history.iterrows()]
+            sel_hist_item = st.selectbox("選擇要還原的歷史結案記錄", options=hist_options, key="sel_hist_restore")
+            sel_idx = hist_options.index(sel_hist_item)
+            cand_row = df_history.iloc[sel_idx]
+            
+            cand_code = str(cand_row['代號']).split('.')[0].strip()
+            already_active = any(str(p['code']).split('.')[0].strip() == cand_code for p in positions)
+            
+            c_r1, c_r2 = st.columns(2)
+            with c_r1:
+                default_target_date = str(cand_row['進場日']).strip()
+                restored_entry_d = st.text_input("指定還原後的正確進場日", value=default_target_date, key="in_rest_d")
+            with c_r2:
+                restored_entry_p = st.number_input("指定還原後的進場成本價", value=float(cand_row['進場價']), step=0.1, key="in_rest_p")
+                
+            if already_active:
+                st.warning(f"⚠️ 注意：目前在倉已有 {cand_row['名稱']} ({cand_code})。執行還原將會直接覆蓋，並校正為進場日 {restored_entry_d}！")
+            
+            c_btn_res, c_btn_clean = st.columns(2)
+            with c_btn_res:
+                if st.button("確認撤回此筆歷史紀錄並恢復持倉", type="primary", use_container_width=True):
+                    ticker = f"{cand_code}.TW"
+                    for _, t in st.session_state.watchlist.items():
+                        if cand_code in t: ticker = t; break
+                        
+                    entry_p = float(restored_entry_p)
+                    cost = float(cand_row['投入金額']) if cand_row['投入金額'] > 0 else 200000.0
+                    tot_shares = int(cost / (entry_p * (1 + FEE_RATE)))
+                    shares_a = tot_shares // 2
+                    shares_b = tot_shares - shares_a
+                    
+                    restored_pos = {
+                        "code": cand_code, "name": cand_row['名稱'], "ticker": ticker,
+                        "entry_date": restored_entry_d.strip(), "entry_price": entry_p,
+                        "total_invested": cost, "shares_a": shares_a, "shares_b": shares_b,
+                        "days_held": 1, "is_breakeven": False, "lot_a_sold": False,
+                        "lot_a_revenue": 0.0, "lot_a_pnl_pct": 0.0, "curr_price": entry_p,
+                        "unrealized_pct": 0.0, "curr_stop": round(entry_p * 0.96, 1),
+                        "tp_stage1": round(entry_p * 1.08, 1), "ma10": round(entry_p * 0.99, 1),
+                        "is_extended": False
+                    }
+                    
+                    positions = [p for p in positions if str(p['code']).split('.')[0].strip() != cand_code]
+                    positions.append(restored_pos)
+                    save_json(POSITIONS_FILE, positions)
+                    
+                    cand_entry_raw = str(cand_row['進場日']).strip()
+                    df_history = df_history[~((df_history['代號'].astype(str).str.split('.').str[0].str.strip() == cand_code) & 
+                                              (df_history['進場日'].astype(str).str.strip() == cand_entry_raw))].reset_index(drop=True)
+                    save_history_csv(df_history)
+                    st.success(f"✅ 已成功將 {cand_row['名稱']} ({cand_code}) 撤銷結案，並恢復至進場日 {restored_entry_d}！")
+                    st.rerun()
+
+            with c_btn_clean:
+                if st.button("🗑️ 僅從歷史明細刪除此紀錄 (不恢復持倉)", type="secondary", use_container_width=True):
+                    cand_entry_raw = str(cand_row['進場日']).strip()
+                    df_history = df_history[~((df_history['代號'].astype(str).str.split('.').str[0].str.strip() == cand_code) & 
+                                              (df_history['進場日'].astype(str).str.strip() == cand_entry_raw))].reset_index(drop=True)
+                    save_history_csv(df_history)
+                    st.success(f"✅ 已從歷史明細表中刪除 {cand_row['名稱']}！")
+                    st.rerun()
 
     st.write("---")
     st.markdown("#### 📋 【歷史結案明細表】")
@@ -618,10 +683,8 @@ with tab_batch:
 
                 now_t = datetime.datetime.now().time()
                 is_trading_hours = (datetime.time(9, 0) <= now_t <= datetime.time(13, 35))
-                if is_trading_hours and len(df) >= 2:
-                    latest, prev = df.iloc[-2], df.iloc[-3]
-                else:
-                    latest, prev = df.iloc[-1], df.iloc[-2]
+                if is_trading_hours and len(df) >= 2: latest, prev = df.iloc[-2], df.iloc[-3]
+                else: latest, prev = df.iloc[-1], df.iloc[-2]
 
                 close, vol, low, high, open_p = float(latest['Close']), float(latest['Volume']), float(latest['Low']), float(latest['High']), float(latest['Open'])
                 ma5, ma10, ma20 = float(latest['MA5']), float(latest['MA10']), float(latest['MA20'])
@@ -986,7 +1049,7 @@ with tab_watchlist:
             nc3.markdown(f"**[📊 鉅亨網法人動態與營收走勢]**(https://invest.cnyes.com/twstock/TWS/{clean_c}/news)")
             nc3.caption("三大法人買賣超與業績解析")
 
-# ================= TAB 4: 策略手冊與 SOP 指南 (V2.5 完整作戰手冊) =================
+# ================= TAB 4: 策略手冊與 SOP 指南 =================
 with tab_docs:
     st.subheader("📖 短線成長股・量縮深蹲 (Squat & Rebound) 全流程作戰手冊 V2.5")
     st.info("💡 本系統專為「不盯盤、每日 16:30 離線決策、次日開盤智慧單自動執行」設計，經量化回測完整實證。")
