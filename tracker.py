@@ -44,7 +44,7 @@ def run_tracker():
     remaining_positions = []
     new_closed_trades = []
 
-    # 取得今日雷達深蹲合格股票代號集合 (用於展延)
+    # 取得今日雷達深蹲合格股票代號集合 (用於安全展延)
     radar_squat_codes = set()
     if report and "stocks" in report:
         radar_squat_codes = {str(s['code']).split('.')[0].strip() for s in report.get("stocks", []) if s.get("is_squat")}
@@ -72,23 +72,30 @@ def run_tracker():
             close = float(latest['Close'])
             ma10 = float(latest['MA10'])
             
+            # 以台股實際開盤日 K 棒計算開盤交易日天數
             trade_dates_after = [idx.strftime('%Y-%m-%d') for idx in df.index if idx.strftime('%Y-%m-%d') > entry_d]
             d = len(trade_dates_after)
             pos['days_held'] = d
 
+            # 💡 安全展延判定：若持倉中再次被雷達相中，且未虧損，上限自動延長至 7 天
             if "is_extended" not in pos:
                 pos["is_extended"] = False
             
             if not pos["is_extended"] and (code in radar_squat_codes):
                 if close >= (entry_p * 0.995):
                     pos["is_extended"] = True
-                    print(f"   🔄 [智慧展延] {name} ({code}) 今日再次符合雷達深蹲且維持成本之上，上限放寬至 7 個交易日！")
+                    print(f"   🔄 [智慧展延] {name} ({code}) 再次符合深蹲且維持成本之上，上限放寬至 7 個交易日！")
 
             max_allowed_days = 7 if pos.get("is_extended") else 4
 
-            # (1) 停損檢驗
+            # (1) 停損檢驗 (動態保本線 或 -4% 硬停損)
             effective_stop = (entry_p * 1.002) if (pos.get('is_breakeven') and d >= 1) else (entry_p * 0.96)
-            if low <= effective_stop:
+            
+            # 💡【核心防誤殺修復】：進場首日 (d == 0) 的全天 Low 往往發生在早盤買進「之前」
+            # 因此進場當天嚴格以收盤價 Close 檢驗；次個交易日起 (d >= 1) 才恢復以盤中 Low 檢驗！
+            check_stop_price = close if d == 0 else low
+
+            if check_stop_price <= effective_stop:
                 exit_p = min(float(latest['Open']), effective_stop)
                 shares_left = pos['shares_a'] + pos['shares_b']
                 rev = shares_left * exit_p * (1 - FEE_RATE - TAX_RATE)
@@ -136,7 +143,7 @@ def run_tracker():
                 })
                 continue
 
-            # (5) 時間停損
+            # (5) 時間停損 (標準4天 / 展延7天)
             if d >= max_allowed_days and not pos.get('lot_a_sold') and close <= entry_p * 1.03:
                 exit_p = close
                 shares_left = pos['shares_a'] + pos['shares_b']
@@ -164,7 +171,7 @@ def run_tracker():
         except Exception as e:
             remaining_positions.append(pos)
 
-    # ================= 2. 檢驗持久佇列 (pending_orders.json) 右側過高建倉 =================
+    # ================= 2. 檢驗待突破佇列 (pending_orders.json) 右側過高建倉 =================
     open_slots = MAX_SLOTS - len(remaining_positions)
     new_pending_list = []
 
@@ -175,11 +182,11 @@ def run_tracker():
         right_trigger = float(cand.get('right_trigger', cand.get('high', 100.0)))
         scan_d = str(cand.get('scan_date', '')).strip()
 
-        # 若已在在倉部位中，直接移出待命佇列
+        # 若已在在倉持股中，直接移出待命佇列
         if any(str(p['code']).split('.')[0].strip() == cand_code for p in remaining_positions):
             continue
 
-        # 若是今天剛掃描出的新標的，繼續保留在待命佇列供次日檢驗
+        # 當天剛產生的標的，繼續保留在佇列中供次日檢驗
         if scan_d >= today_str:
             new_pending_list.append(cand)
             continue
@@ -212,8 +219,7 @@ def run_tracker():
                             "entry_date": today_str,
                             "entry_price": round(buy_price, 1),
                             "total_invested": cost, "shares_a": shares_a, "shares_b": shares_b,
-                            "days_held": 0,
-                            "is_breakeven": False, "lot_a_sold": False,
+                            "days_held": 0, "is_breakeven": False, "lot_a_sold": False,
                             "lot_a_revenue": 0.0, "lot_a_pnl_pct": 0.0,
                             "curr_price": round(t1_close, 1),
                             "unrealized_pct": round((t1_close - buy_price) / buy_price * 100, 2),
@@ -224,13 +230,11 @@ def run_tracker():
                         })
                         open_slots -= 1
                         print(f"   🎯 [右側過高成立] {cand_name} ({cand_code}) 最高 ${t1_high} 突破 ${right_trigger}，於今日正式建倉！")
-                        continue  # 成功進場，移出待命佇列
+                        continue
                 else:
                     print(f"   ❌ [放棄進場] {cand_name} ({cand_code}) 今日未突破門檻 ${right_trigger}，失效移出。")
             except Exception as e:
                 new_pending_list.append(cand)
-        else:
-            print(f"   ⚠️ 無可用槽位，無法建倉 {cand_name}")
 
     save_json(POSITIONS_FILE, remaining_positions)
     save_json(PENDING_FILE, new_pending_list)
