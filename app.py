@@ -565,8 +565,8 @@ with tab_tracker:
                     st.success(f"✅ 已成功將 {edit_target} 校正！總股數：{int(new_shares):,d} 股，實際本金：NT$ {int(new_cost):,d}！")
                     st.rerun()
 
-    # 💡【核心重大升級】：手動平倉結案（支援「部分減倉 / 賣出指定股數」與「全數平倉」）
-    with st.expander("🎯 手動平倉與部分減倉（自訂賣出股數與成交價，支援降低持股）", expanded=True):
+    # 手動平倉與部分減倉
+    with st.expander("🎯 手動平倉與部分減倉（自訂賣出股數與成交價，支援降低持股）", expanded=False):
         st.info("💡 支援全數清倉與「部分減倉」！若因大盤背離或防禦 SOP 需降低持股，可輸入賣出股數，系統會依比例結算損益並保留剩餘部位在倉監控。")
         if positions:
             c_close1, c_close2 = st.columns(2)
@@ -577,7 +577,6 @@ with tab_tracker:
                 default_sell_p = float(matched_pos.get('curr_price', matched_pos['entry_price'])) if matched_pos else 100.0
                 user_exit_price = st.number_input("實際賣出成交均價 (NTD)", value=default_sell_p, step=0.1, key="in_exit_p")
 
-            # 當前可賣總股數
             curr_available_shares = int(matched_pos['shares_a'] + matched_pos['shares_b']) if matched_pos else 1000
             
             c_shares_sel, c_reason_sel = st.columns(2)
@@ -606,8 +605,7 @@ with tab_tracker:
                 ]
                 user_exit_reason = st.selectbox("選擇出場/減碼原因", default_reasons, key="sel_exit_reason")
 
-            btn_label = "確認執行平倉／減碼並寫入帳本"
-            if st.button(btn_label, type="primary", use_container_width=True):
+            if st.button("確認執行平倉／減碼並寫入帳本", type="primary", use_container_width=True):
                 if matched_pos:
                     today_str = datetime.date.today().strftime("%Y-%m-%d")
                     e_price = float(user_exit_price)
@@ -616,7 +614,6 @@ with tab_tracker:
                     total_orig_cost = float(matched_pos['total_invested'])
                     days = int(matched_pos.get('days_held', 0))
 
-                    # 1. 計算本次賣出部分的財務數據
                     cost_ratio = (sell_cnt / total_orig_shares) if total_orig_shares > 0 else 1.0
                     cost_allocated = total_orig_cost * cost_ratio
                     gross_rev = sell_cnt * e_price
@@ -626,7 +623,6 @@ with tab_tracker:
 
                     reason_final = f"{user_exit_reason} (減碼 {sell_cnt}股 / 餘 {total_orig_shares - sell_cnt}股)" if sell_cnt < total_orig_shares else user_exit_reason
 
-                    # 2. 寫入歷史帳本
                     new_record = {
                         "代號": matched_pos['code'], "名稱": matched_pos['name'],
                         "進場日": matched_pos['entry_date'], "進場價": matched_pos['entry_price'],
@@ -638,14 +634,11 @@ with tab_tracker:
                     df_history = pd.concat([df_history, pd.DataFrame([new_record])], ignore_index=True)
                     save_history_csv(df_history)
 
-                    # 3. 處理剩餘在庫部位
                     if sell_cnt >= total_orig_shares:
-                        # 全數賣出：自持倉清單中移除
                         positions = [p for p in positions if f"{p['name']} ({p['code']})" != target_to_close]
                         save_json(POSITIONS_FILE, positions)
                         st.success(f"✅ 已成功【全數平倉】{target_to_close}！收回 NT$ {int(net_rev):,d}，損益：NT$ {int(net_pnl):+,d} ({roi_pct:+.2f}%)！")
                     else:
-                        # 部分減碼：更新剩餘股數與剩餘本金，保留在倉
                         remaining_shares = total_orig_shares - sell_cnt
                         remaining_cost = total_orig_cost - cost_allocated
                         matched_pos['shares_a'] = remaining_shares // 2
@@ -731,6 +724,49 @@ with tab_tracker:
                     save_history_csv(df_history)
                     st.success(f"✅ 已從歷史明細表中刪除 {cand_row['名稱']}！")
                     st.rerun()
+
+    # 💡【核心新增】：校正歷史結案紀錄（修正實際賣出價格、出場原因或日期）
+    if not df_history.empty:
+        with st.expander("✏️ 校正歷史結案紀錄（修改實際賣出價格與損益精算）", expanded=True):
+            st.info("💡 若系統自動觸發出場時紀錄的價格與券商真實成交價有微幅落差，可在此填入真實賣出價，系統將自動重新計算淨損益與報酬率！")
+            hist_edit_options = [f"第{i+1}筆：{r['名稱']} ({r['代號']}) - 進場日:{r['進場日']} - 目前損益:{r['綜合報酬率%']}%" for i, r in df_history.iterrows()]
+            sel_edit_hist_item = st.selectbox("選擇要修正賣出價格的結案交易", options=hist_edit_options, key="sel_edit_hist_target")
+            sel_edit_idx = hist_edit_options.index(sel_edit_hist_item)
+            target_hist_row = df_history.iloc[sel_edit_idx]
+
+            c_h1, c_h2, c_h3 = st.columns(3)
+            with c_h1:
+                st.caption(f"進場價：**${target_hist_row['進場價']}** ｜ 投入本金：**NT$ {int(target_hist_row['投入金額']):,d}**")
+                # 估算原股數
+                entry_p_hist = float(target_hist_row['進場價'])
+                cost_hist = float(target_hist_row['投入金額'])
+                est_shares_hist = int(cost_hist / (entry_p_hist * (1 + FEE_RATE))) if entry_p_hist > 0 else 1000
+                st.write(f"原始估計股數：`{est_shares_hist:,d}` 股")
+            with c_h2:
+                # 估算舊出場價
+                curr_exit_p_est = round(float(target_hist_row['回收金額']) / (est_shares_hist * (1 - FEE_RATE - TAX_RATE)), 1) if est_shares_hist > 0 else float(target_hist_row['進場價'])
+                new_actual_exit_p = st.number_input("券商真實賣出成交均價 (NTD)", value=float(curr_exit_p_est), step=0.1, key="in_actual_exit_p")
+            with c_h3:
+                new_hist_reason = st.text_input("出場原因說明", value=str(target_hist_row['出場原因']), key="in_actual_exit_reason")
+
+            if st.button("確認儲存校正數值並重新計算歷史帳本", type="primary", use_container_width=True, key="btn_save_hist_edit"):
+                new_p = float(new_actual_exit_p)
+                # 重新計算回收金額與損益
+                new_gross_rev = est_shares_hist * new_p
+                new_net_rev = new_gross_rev * (1 - FEE_RATE - TAX_RATE)
+                new_net_pnl = new_net_rev - cost_hist
+                new_roi = (new_net_pnl / cost_hist * 100) if cost_hist > 0 else 0.0
+
+                df_history.at[sel_edit_idx, '回收金額'] = int(new_net_rev)
+                df_history.at[sel_edit_idx, '淨損益(NTD)'] = int(new_net_pnl)
+                df_history.at[sel_edit_idx, '部位A_損益%'] = round(new_roi, 2)
+                df_history.at[sel_edit_idx, '部位B_損益%'] = round(new_roi, 2)
+                df_history.at[sel_edit_idx, '綜合報酬率%'] = round(new_roi, 2)
+                df_history.at[sel_edit_idx, '出場原因'] = new_hist_reason.strip()
+
+                save_history_csv(df_history)
+                st.success(f"✅ 已成功將 {target_hist_row['名稱']} 的賣出價格校正為 ${new_p:.1f}！淨損益已更新為 NT$ {int(new_net_pnl):+,d} ({new_roi:+.2f}%)！")
+                st.rerun()
 
     st.write("---")
     st.markdown("#### 📋 【歷史結案明細表】")
@@ -1188,7 +1224,7 @@ with tab_docs:
 
     with st.expander("🛑 五、 嚴格五大出場紀律 SOP（含智慧展延防護）", expanded=True):
         st.write("• **🛑 防線 1【硬停損線 (-4.0%)】**：跌破成本價之 -4.0%，無條件市價全數砍單。首日（Day 0）以收盤價防守避免早盤低點誤殺，次日起恢復盤中最低價監控。")
-        st.write("• **⏳ 防線 2【時間停損 (4個交易日 / 最多展延至7天)】**：持有滿 4 個實際交易日漲幅未達 +3% 則平手換股。**若持有期間再次符合雷達深蹲且帳面維持成本之上，自動展延 1 次至滿 7 個交易日**。")
+        st.write("• **⏳ 防線 2【時間停損 (4個交易日 / 最多展延至7天)】**：持有滿 4 個實際交易日漲幅未達 +3% 則平手換股。**若持有期間再次符合雷達深蹲且帳面維持成本之上，自動展延 1 次至滿 7 個交易日**。**執行流程為『當天 16:30 確認，次個交易日開盤撮合出清』**。")
         st.write("• **🛡️ 防線 3【動態保本機制 (+4.0%)】**：盤中浮盈達 +4.0% 時，次日起停損防線調升至成本價 (+0.2%)，消滅賺變賠。")
         st.write("• **🎯 防線 4【第一階段停利 (+8.0%)】**：觸及成本價 +8.0% 時，掛單賣出部位 A（50% 股數）鎖住勝果。")
         st.write("• **🏄 防線 5【第二階段波段落袋 (破 10MA)】**：剩餘部位 B 只要收盤跌破 10MA，次個交易日開盤市價出清。")
