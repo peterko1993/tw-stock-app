@@ -725,9 +725,9 @@ with tab_tracker:
                     st.success(f"✅ 已從歷史明細表中刪除 {cand_row['名稱']}！")
                     st.rerun()
 
-    # 💡【核心新增】：校正歷史結案紀錄（修正實際賣出價格、出場原因或日期）
+    # 校正歷史結案紀錄
     if not df_history.empty:
-        with st.expander("✏️ 校正歷史結案紀錄（修改實際賣出價格與損益精算）", expanded=True):
+        with st.expander("✏️ 校正歷史結案紀錄（修改實際賣出價格與損益精算）", expanded=False):
             st.info("💡 若系統自動觸發出場時紀錄的價格與券商真實成交價有微幅落差，可在此填入真實賣出價，系統將自動重新計算淨損益與報酬率！")
             hist_edit_options = [f"第{i+1}筆：{r['名稱']} ({r['代號']}) - 進場日:{r['進場日']} - 目前損益:{r['綜合報酬率%']}%" for i, r in df_history.iterrows()]
             sel_edit_hist_item = st.selectbox("選擇要修正賣出價格的結案交易", options=hist_edit_options, key="sel_edit_hist_target")
@@ -737,13 +737,11 @@ with tab_tracker:
             c_h1, c_h2, c_h3 = st.columns(3)
             with c_h1:
                 st.caption(f"進場價：**${target_hist_row['進場價']}** ｜ 投入本金：**NT$ {int(target_hist_row['投入金額']):,d}**")
-                # 估算原股數
                 entry_p_hist = float(target_hist_row['進場價'])
                 cost_hist = float(target_hist_row['投入金額'])
                 est_shares_hist = int(cost_hist / (entry_p_hist * (1 + FEE_RATE))) if entry_p_hist > 0 else 1000
                 st.write(f"原始估計股數：`{est_shares_hist:,d}` 股")
             with c_h2:
-                # 估算舊出場價
                 curr_exit_p_est = round(float(target_hist_row['回收金額']) / (est_shares_hist * (1 - FEE_RATE - TAX_RATE)), 1) if est_shares_hist > 0 else float(target_hist_row['進場價'])
                 new_actual_exit_p = st.number_input("券商真實賣出成交均價 (NTD)", value=float(curr_exit_p_est), step=0.1, key="in_actual_exit_p")
             with c_h3:
@@ -751,7 +749,6 @@ with tab_tracker:
 
             if st.button("確認儲存校正數值並重新計算歷史帳本", type="primary", use_container_width=True, key="btn_save_hist_edit"):
                 new_p = float(new_actual_exit_p)
-                # 重新計算回收金額與損益
                 new_gross_rev = est_shares_hist * new_p
                 new_net_rev = new_gross_rev * (1 - FEE_RATE - TAX_RATE)
                 new_net_pnl = new_net_rev - cost_hist
@@ -772,8 +769,133 @@ with tab_tracker:
     st.markdown("#### 📋 【歷史結案明細表】")
     if not df_history.empty:
         st.dataframe(df_history, use_container_width=True, hide_index=True)
+
+        # 💡【核心新增】：歷史結案視覺化統計儀表板 (含累計成本、累計盈虧、單筆盈虧、SOP出場原因分佈)
+        st.write("---")
+        st.markdown("#### 📊 【歷史結案視覺化統計儀表板】")
+        
+        # 準備繪圖數據
+        df_plot = df_history.copy().reset_index(drop=True)
+        df_plot['交易序號'] = [f"第{i+1}筆 {r['名稱']}" for i, r in df_plot.iterrows()]
+        df_plot['累計成本'] = df_plot['投入金額'].cumsum()
+        df_plot['累計回收'] = df_plot['回收金額'].cumsum()
+        df_plot['累計淨損益'] = df_plot['淨損益(NTD)'].cumsum()
+
+        # 頂部關鍵財務看板 (KPI Banner)
+        total_invested_rolling = df_plot['投入金額'].sum()
+        total_pnl_val = df_plot['淨損益(NTD)'].sum()
+        total_roi_val = (total_pnl_val / total_invested_rolling * 100) if total_invested_rolling > 0 else 0.0
+        
+        wins_df = df_plot[df_plot['淨損益(NTD)'] > 0]
+        losses_df = df_plot[df_plot['淨損益(NTD)'] <= 0]
+        avg_win_amt = wins_df['淨損益(NTD)'].mean() if not wins_df.empty else 0
+        avg_loss_amt = abs(losses_df['淨損益(NTD)'].mean()) if not losses_df.empty else 1
+        profit_factor = (avg_win_amt / avg_loss_amt) if avg_loss_amt > 0 else 0.0
+
+        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+        kpi1.metric("累計滾動投入成本", f"NT$ {int(total_invested_rolling):,d}")
+        kpi2.metric("累積實現淨損益", f"NT$ {int(total_pnl_val):+,d}", delta=f"{total_roi_val:+.2f}%")
+        kpi3.metric("實戰賺賠比 (PF)", f"{profit_factor:.2f}")
+        kpi4.metric("平均獲利 vs 平均虧損", f"NT$ {int(avg_win_amt):,d} / NT$ {int(avg_loss_amt):,d}")
+
+        # 建立 2x2 視覺化圖表
+        fig_stat = make_subplots(
+            rows=2, cols=2,
+            subplot_titles=(
+                "📈 累計投入成本 vs. 累計淨盈虧走勢 (雙 Y 軸)",
+                "📊 每筆交易實質損益金額與報酬率 (紅賺綠跌)",
+                "🍩 SOP 出場原因結構分佈",
+                "⏱️ 持股天數與獲利效率對照 (天數 vs ROI%)"
+            ),
+            specs=[
+                [{"secondary_y": True}, {"type": "xy"}],
+                [{"type": "domain"}, {"type": "xy"}]
+            ],
+            vertical_spacing=0.18,
+            horizontal_spacing=0.10
+        )
+
+        # 1. 左上：累計成本 (主軸) vs 累計淨損益 (次軸)
+        fig_stat.add_trace(
+            go.Bar(
+                x=df_plot['交易序號'],
+                y=df_plot['累計成本'],
+                name="累計投入成本 (NTD)",
+                marker_color='rgba(100, 149, 237, 0.4)',
+                hoverinfo="x+y"
+            ),
+            row=1, col=1, secondary_y=False
+        )
+        pnl_color = '#eb4034' if total_pnl_val >= 0 else '#2ba84a'
+        fig_stat.add_trace(
+            go.Scatter(
+                x=df_plot['交易序號'],
+                y=df_plot['累計淨損益'],
+                name="累計淨損益 (NTD)",
+                mode='lines+markers+text',
+                line=dict(color=pnl_color, width=3),
+                marker=dict(size=8),
+                text=[f"{v:+,d}" for v in df_plot['累計淨損益']],
+                textposition="top center"
+            ),
+            row=1, col=1, secondary_y=True
+        )
+        fig_stat.update_yaxes(title_text="累計投入成本 (NTD)", secondary_y=False, row=1, col=1)
+        fig_stat.update_yaxes(title_text="累計淨損益 (NTD)", secondary_y=True, row=1, col=1)
+
+        # 2. 右上：每筆損益長條圖 (台股紅賺綠賠)
+        bar_colors = ['#eb4034' if x >= 0 else '#2ba84a' for x in df_plot['淨損益(NTD)']]
+        bar_texts = [f"{amt:+,d} ({roi:+.1f}%)" for amt, roi in zip(df_plot['淨損益(NTD)'], df_plot['綜合報酬率%'])]
+        fig_stat.add_trace(
+            go.Bar(
+                x=df_plot['交易序號'],
+                y=df_plot['淨損益(NTD)'],
+                name="單筆淨損益",
+                marker_color=bar_colors,
+                text=bar_texts,
+                textposition='outside'
+            ),
+            row=1, col=2
+        )
+        fig_stat.update_yaxes(title_text="單筆損益 (NTD)", row=1, col=2)
+
+        # 3. 左下：出場原因甜甜圈圓餅圖
+        reason_counts = df_plot['出場原因'].apply(lambda x: str(x).split(' (')[0]).value_counts()
+        fig_stat.add_trace(
+            go.Pie(
+                labels=reason_counts.index,
+                values=reason_counts.values,
+                hole=0.45,
+                textinfo='label+percent',
+                marker=dict(colors=['#ff9999','#66b3ff','#99ff99','#ffcc99','#c2c2f0','#ffb3e6'])
+            ),
+            row=2, col=1
+        )
+
+        # 4. 右下：持股天數 vs 綜合報酬率散點柱狀圖
+        fig_stat.add_trace(
+            go.Bar(
+                x=df_plot['交易序號'],
+                y=df_plot['綜合報酬率%'],
+                name="報酬率%",
+                marker_color=bar_colors,
+                text=[f"{d}天 : {r:+.1f}%" for d, r in zip(df_plot['持股天數'], df_plot['綜合報酬率%'])],
+                textposition='auto'
+            ),
+            row=2, col=2
+        )
+        fig_stat.update_yaxes(title_text="報酬率 (%)", row=2, col=2)
+
+        fig_stat.update_layout(
+            height=720,
+            showlegend=False,
+            margin=dict(l=10, r=10, t=40, b=20),
+            hovermode="x unified"
+        )
+        st.plotly_chart(fig_stat, use_container_width=True)
+
     else:
-        st.info("尚無結案交易紀錄，等待排程每日 16:30 自動追蹤結算。")
+        st.info("尚無結案交易紀錄，等待排程每日 16:30 自動追蹤結算，或可使用上方「手動平倉結案」自訂出場。")
 
 # ================= TAB 2: 自選名單批次體檢 =================
 with tab_batch:
