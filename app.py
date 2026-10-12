@@ -416,12 +416,15 @@ with tab_tracker:
     else:
         win_rate, total_pnl, avg_days = 0.0, 0, 0.0
 
-    m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("在倉持股數", f"{len(positions)} / 3 檔")
-    m2.metric("已結案筆數", f"{total_trades} 筆")
+    # 手機友善：頂部重要數據以 2x2 或 3+2 呈現
+    m1, m2, m3 = st.columns(3)
+    m1.metric("在倉持股", f"{len(positions)} / 3 檔")
+    m2.metric("已結案", f"{total_trades} 筆")
     m3.metric("勝率", f"{win_rate:.1f} %")
+    
+    m4, m5 = st.columns(2)
     m4.metric("累積淨獲利", f"NT$ {int(total_pnl):+,d}")
-    m5.metric("平均持股交易日", f"{avg_days:.1f} 天")
+    m5.metric("平均持股天數", f"{avg_days:.1f} 天")
     st.divider()
 
     st.markdown("#### 🏦 【當前持倉部位即時監控・實戰下單指標】")
@@ -770,18 +773,17 @@ with tab_tracker:
     if not df_history.empty:
         st.dataframe(df_history, use_container_width=True, hide_index=True)
 
-        # 💡【核心新增】：歷史結案視覺化統計儀表板 (含累計成本、累計盈虧、單筆盈虧、SOP出場原因分佈)
+        # 💡【手機優化版】：歷史結案視覺化統計儀表板 (單欄全寬垂直流動，拒絕擠壓)
         st.write("---")
         st.markdown("#### 📊 【歷史結案視覺化統計儀表板】")
         
-        # 準備繪圖數據
         df_plot = df_history.copy().reset_index(drop=True)
-        df_plot['交易序號'] = [f"第{i+1}筆 {r['名稱']}" for i, r in df_plot.iterrows()]
+        df_plot['交易序號'] = [f"#{i+1} {r['名稱']}" for i, r in df_plot.iterrows()]
         df_plot['累計成本'] = df_plot['投入金額'].cumsum()
         df_plot['累計回收'] = df_plot['回收金額'].cumsum()
         df_plot['累計淨損益'] = df_plot['淨損益(NTD)'].cumsum()
 
-        # 頂部關鍵財務看板 (KPI Banner)
+        # 頂部關鍵財務看板 (手機友善 2x2 排版)
         total_invested_rolling = df_plot['投入金額'].sum()
         total_pnl_val = df_plot['淨損益(NTD)'].sum()
         total_roi_val = (total_pnl_val / total_invested_rolling * 100) if total_invested_rolling > 0 else 0.0
@@ -792,107 +794,102 @@ with tab_tracker:
         avg_loss_amt = abs(losses_df['淨損益(NTD)'].mean()) if not losses_df.empty else 1
         profit_factor = (avg_win_amt / avg_loss_amt) if avg_loss_amt > 0 else 0.0
 
-        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-        kpi1.metric("累計滾動投入成本", f"NT$ {int(total_invested_rolling):,d}")
-        kpi2.metric("累積實現淨損益", f"NT$ {int(total_pnl_val):+,d}", delta=f"{total_roi_val:+.2f}%")
-        kpi3.metric("實戰賺賠比 (PF)", f"{profit_factor:.2f}")
-        kpi4.metric("平均獲利 vs 平均虧損", f"NT$ {int(avg_win_amt):,d} / NT$ {int(avg_loss_amt):,d}")
+        kpi_r1_c1, kpi_r1_c2 = st.columns(2)
+        kpi_r1_c1.metric("累計滾動成本", f"NT$ {int(total_invested_rolling):,d}")
+        kpi_r1_c2.metric("累積實現損益", f"NT$ {int(total_pnl_val):+,d}", delta=f"{total_roi_val:+.2f}%")
 
-        # 建立 2x2 視覺化圖表
-        fig_stat = make_subplots(
-            rows=2, cols=2,
-            subplot_titles=(
-                "📈 累計投入成本 vs. 累計淨盈虧走勢 (雙 Y 軸)",
-                "📊 每筆交易實質損益金額與報酬率 (紅賺綠跌)",
-                "🍩 SOP 出場原因結構分佈",
-                "⏱️ 持股天數與獲利效率對照 (天數 vs ROI%)"
-            ),
-            specs=[
-                [{"secondary_y": True}, {"type": "xy"}],
-                [{"type": "domain"}, {"type": "xy"}]
-            ],
-            vertical_spacing=0.18,
-            horizontal_spacing=0.10
-        )
+        kpi_r2_c1, kpi_r2_c2 = st.columns(2)
+        kpi_r2_c1.metric("實戰賺賠比 (PF)", f"{profit_factor:.2f}")
+        kpi_r2_c2.metric("均贏 / 均虧", f"{int(avg_win_amt):,d} / {int(avg_loss_amt):,d}")
 
-        # 1. 左上：累計成本 (主軸) vs 累計淨損益 (次軸)
-        fig_stat.add_trace(
+        st.write("---")
+
+        # 📱 圖表 1：累計投入成本 vs. 累計淨盈虧走勢 (全寬單圖，拉開左右 Y 軸)
+        st.markdown("##### 📈 1. 累計投入成本 vs. 累計淨盈虧走勢")
+        fig1 = make_subplots(specs=[[{"secondary_y": True}]])
+        fig1.add_trace(
             go.Bar(
                 x=df_plot['交易序號'],
                 y=df_plot['累計成本'],
-                name="累計投入成本 (NTD)",
-                marker_color='rgba(100, 149, 237, 0.4)',
+                name="累計成本",
+                marker_color='rgba(100, 149, 237, 0.35)',
                 hoverinfo="x+y"
             ),
-            row=1, col=1, secondary_y=False
+            secondary_y=False
         )
         pnl_color = '#eb4034' if total_pnl_val >= 0 else '#2ba84a'
-        fig_stat.add_trace(
+        fig1.add_trace(
             go.Scatter(
                 x=df_plot['交易序號'],
                 y=df_plot['累計淨損益'],
-                name="累計淨損益 (NTD)",
+                name="累計淨盈虧",
                 mode='lines+markers+text',
                 line=dict(color=pnl_color, width=3),
                 marker=dict(size=8),
                 text=[f"{v:+,d}" for v in df_plot['累計淨損益']],
                 textposition="top center"
             ),
-            row=1, col=1, secondary_y=True
+            secondary_y=True
         )
-        fig_stat.update_yaxes(title_text="累計投入成本 (NTD)", secondary_y=False, row=1, col=1)
-        fig_stat.update_yaxes(title_text="累計淨損益 (NTD)", secondary_y=True, row=1, col=1)
-
-        # 2. 右上：每筆損益長條圖 (台股紅賺綠賠)
-        bar_colors = ['#eb4034' if x >= 0 else '#2ba84a' for x in df_plot['淨損益(NTD)']]
-        bar_texts = [f"{amt:+,d} ({roi:+.1f}%)" for amt, roi in zip(df_plot['淨損益(NTD)'], df_plot['綜合報酬率%'])]
-        fig_stat.add_trace(
-            go.Bar(
-                x=df_plot['交易序號'],
-                y=df_plot['淨損益(NTD)'],
-                name="單筆淨損益",
-                marker_color=bar_colors,
-                text=bar_texts,
-                textposition='outside'
-            ),
-            row=1, col=2
-        )
-        fig_stat.update_yaxes(title_text="單筆損益 (NTD)", row=1, col=2)
-
-        # 3. 左下：出場原因甜甜圈圓餅圖
-        reason_counts = df_plot['出場原因'].apply(lambda x: str(x).split(' (')[0]).value_counts()
-        fig_stat.add_trace(
-            go.Pie(
-                labels=reason_counts.index,
-                values=reason_counts.values,
-                hole=0.45,
-                textinfo='label+percent',
-                marker=dict(colors=['#ff9999','#66b3ff','#99ff99','#ffcc99','#c2c2f0','#ffb3e6'])
-            ),
-            row=2, col=1
-        )
-
-        # 4. 右下：持股天數 vs 綜合報酬率散點柱狀圖
-        fig_stat.add_trace(
-            go.Bar(
-                x=df_plot['交易序號'],
-                y=df_plot['綜合報酬率%'],
-                name="報酬率%",
-                marker_color=bar_colors,
-                text=[f"{d}天 : {r:+.1f}%" for d, r in zip(df_plot['持股天數'], df_plot['綜合報酬率%'])],
-                textposition='auto'
-            ),
-            row=2, col=2
-        )
-        fig_stat.update_yaxes(title_text="報酬率 (%)", row=2, col=2)
-
-        fig_stat.update_layout(
-            height=720,
-            showlegend=False,
-            margin=dict(l=10, r=10, t=40, b=20),
+        fig1.update_yaxes(title_text="累計成本", secondary_y=False, showgrid=False)
+        fig1.update_yaxes(title_text="累計淨損益", secondary_y=True, showgrid=True)
+        fig1.update_layout(
+            height=340,
+            margin=dict(l=5, r=5, t=25, b=25),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             hovermode="x unified"
         )
-        st.plotly_chart(fig_stat, use_container_width=True)
+        st.plotly_chart(fig1, use_container_width=True, config={'displayModeBar': False})
+
+        # 📱 圖表 2：每筆交易實質損益金額 (全寬長條圖)
+        st.markdown("##### 📊 2. 每筆交易實質損益與報酬率")
+        bar_colors = ['#eb4034' if x >= 0 else '#2ba84a' for x in df_plot['淨損益(NTD)']]
+        bar_texts = [f"{amt:+,d} ({roi:+.1f}%)" for amt, roi in zip(df_plot['淨損益(NTD)'], df_plot['綜合報酬率%'])]
+        fig2 = go.Figure(go.Bar(
+            x=df_plot['交易序號'],
+            y=df_plot['淨損益(NTD)'],
+            marker_color=bar_colors,
+            text=bar_texts,
+            textposition='outside'
+        ))
+        fig2.update_layout(
+            height=300,
+            margin=dict(l=5, r=5, t=25, b=25),
+            yaxis_title="淨損益 (NTD)"
+        )
+        st.plotly_chart(fig2, use_container_width=True, config={'displayModeBar': False})
+
+        # 📱 圖表 3 與 4：甜甜圈圖與持股天數 (手機依序全寬展示)
+        st.markdown("##### 🍩 3. SOP 出場原因結構佔比")
+        reason_counts = df_plot['出場原因'].apply(lambda x: str(x).split(' (')[0]).value_counts()
+        fig3 = go.Figure(go.Pie(
+            labels=reason_counts.index,
+            values=reason_counts.values,
+            hole=0.45,
+            textinfo='label+percent',
+            marker=dict(colors=['#ff9999','#66b3ff','#99ff99','#ffcc99','#c2c2f0','#ffb3e6'])
+        ))
+        fig3.update_layout(
+            height=280,
+            margin=dict(l=10, r=10, t=10, b=10),
+            legend=dict(orientation="h", yanchor="bottom", y=-0.2)
+        )
+        st.plotly_chart(fig3, use_container_width=True, config={'displayModeBar': False})
+
+        st.markdown("##### ⏱️ 4. 持股天數與獲利效率對照")
+        fig4 = go.Figure(go.Bar(
+            x=df_plot['交易序號'],
+            y=df_plot['綜合報酬率%'],
+            marker_color=bar_colors,
+            text=[f"{d}天 : {r:+.1f}%" for d, r in zip(df_plot['持股天數'], df_plot['綜合報酬率%'])],
+            textposition='auto'
+        ))
+        fig4.update_layout(
+            height=280,
+            margin=dict(l=5, r=5, t=25, b=25),
+            yaxis_title="報酬率 (%)"
+        )
+        st.plotly_chart(fig4, use_container_width=True, config={'displayModeBar': False})
 
     else:
         st.info("尚無結案交易紀錄，等待排程每日 16:30 自動追蹤結算，或可使用上方「手動平倉結案」自訂出場。")
