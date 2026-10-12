@@ -89,20 +89,17 @@ def save_history_csv(df):
     with open(HISTORY_FILE, "rb") as f:
         push_file_to_github(HISTORY_FILE, f.read())
 
-# 💡【核心升級】：三維大盤風控檢驗 (加權 + 櫃買 OTC + 全市場騰落統計)
 @st.cache_data(ttl=1800)
 def get_comprehensive_market_status():
     status_info = {
         "twii_c": 0, "twii_ma": 0, "twii_bull": True,
         "otc_c": 0, "otc_ma": 0, "otc_bull": True,
         "up_stocks": 0, "down_stocks": 0, "has_adl": False,
-        "env_level": "GREEN", # GREEN, YELLOW, RED
+        "env_level": "GREEN",
         "env_title": "多頭健康",
         "env_desc": "",
-        "budget_factor": 1.0 # 1.0 (滿額20萬) 或 0.7 (防禦14萬)
+        "budget_factor": 1.0
     }
-    
-    # 1. 下載加權 (^TWII) 與 櫃買 (^TWOII)
     try:
         df_indices = yf.download(["^TWII", "^TWOII"], period="3mo", interval="1d", progress=False)
         if not df_indices.empty:
@@ -122,7 +119,6 @@ def get_comprehensive_market_status():
                 except Exception: pass
     except Exception: pass
 
-    # 2. 取得全市場騰落家數 (證交所大盤成交統計)
     try:
         url_twse_stat = "https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?response=json&type=MS"
         res_stat = requests.get(url_twse_stat, headers={"User-Agent": "Mozilla/5.0"}, timeout=3)
@@ -141,7 +137,6 @@ def get_comprehensive_market_status():
                 status_info["has_adl"] = True
     except Exception: pass
 
-    # 3. 綜合評定三維風控等級
     twii_ok = status_info["twii_bull"]
     otc_ok = status_info["otc_bull"]
     up_s = status_info["up_stocks"]
@@ -287,7 +282,6 @@ with st.sidebar:
 
 st.title("📈 短線成長股・量縮深蹲指示器 V2.6 (三維大盤風控版)")
 
-# 💡 頂部三維大盤狀態儀表板
 mkt_env = get_comprehensive_market_status()
 if mkt_env["env_level"] == "GREEN":
     st.success(f"**{mkt_env['env_title']}** ｜ 加權：{mkt_env['twii_c']:,.0f} (月線 {mkt_env['twii_ma']:,.0f}) ｜ 櫃買：{mkt_env['otc_c']:,.1f} (月線 {mkt_env['otc_ma']:,.1f})\n\n{mkt_env['env_desc']}")
@@ -477,7 +471,7 @@ with tab_tracker:
         st.info("目前無在倉持股，現金池 100% 待命。")
 
     # 手動快速補登開倉
-    with st.expander("➕ 手動快速補登開倉（可自訂實際買進股數與投入金額）", expanded=True):
+    with st.expander("➕ 手動快速補登開倉（可自訂實際買進股數與投入金額）", expanded=False):
         if mkt_env["env_level"] == "YELLOW":
             st.warning("⚠️ 目前處於拉積盤警訊，建議本筆下單預算打 7 折（約 14 萬元），並優先開倉 S 級標的！")
         else:
@@ -571,59 +565,95 @@ with tab_tracker:
                     st.success(f"✅ 已成功將 {edit_target} 校正！總股數：{int(new_shares):,d} 股，實際本金：NT$ {int(new_cost):,d}！")
                     st.rerun()
 
-    # 手動平倉結案
-    with st.expander("🎯 手動平倉結案（自訂出場價記帳至歷史明細）", expanded=False):
-        st.info("若你已在券商帳戶實際出清該檔股票，可在此填寫賣出價，系統將自動計算損益並歸檔至歷史結案帳本！")
+    # 💡【核心重大升級】：手動平倉結案（支援「部分減倉 / 賣出指定股數」與「全數平倉」）
+    with st.expander("🎯 手動平倉與部分減倉（自訂賣出股數與成交價，支援降低持股）", expanded=True):
+        st.info("💡 支援全數清倉與「部分減倉」！若因大盤背離或防禦 SOP 需降低持股，可輸入賣出股數，系統會依比例結算損益並保留剩餘部位在倉監控。")
         if positions:
-            c_close1, c_close2, c_close3 = st.columns(3)
+            c_close1, c_close2 = st.columns(2)
             with c_close1:
-                target_to_close = st.selectbox("選擇要結案平倉的在倉標的", options=[f"{p['name']} ({p['code']})" for p in positions], key="sel_close_pos")
+                target_to_close = st.selectbox("選擇要賣出/減碼的在倉標的", options=[f"{p['name']} ({p['code']})" for p in positions], key="sel_close_pos")
                 matched_pos = next((p for p in positions if f"{p['name']} ({p['code']})" == target_to_close), None)
             with c_close2:
                 default_sell_p = float(matched_pos.get('curr_price', matched_pos['entry_price'])) if matched_pos else 100.0
                 user_exit_price = st.number_input("實際賣出成交均價 (NTD)", value=default_sell_p, step=0.1, key="in_exit_p")
-            with c_close3:
-                user_exit_reason = st.selectbox("選擇結案原因", [
-                    "🎯 手動獲利了結", "🛑 手動停損離場", "⏳ 手動換股平倉", "🏆 達標全數出場", "🛡️ 手動保本出場"
-                ], key="sel_exit_reason")
-                
-            if st.button("確認結案此筆交易並寫入帳本", type="primary", use_container_width=True):
+
+            # 當前可賣總股數
+            curr_available_shares = int(matched_pos['shares_a'] + matched_pos['shares_b']) if matched_pos else 1000
+            
+            c_shares_sel, c_reason_sel = st.columns(2)
+            with c_shares_sel:
+                user_sell_shares = st.number_input(
+                    f"本次賣出股數（最多 {curr_available_shares:,d} 股）",
+                    min_value=1,
+                    max_value=curr_available_shares,
+                    value=curr_available_shares,
+                    step=100,
+                    key="in_sell_shares_cnt"
+                )
+                if user_sell_shares < curr_available_shares:
+                    st.caption(f"ℹ️ 狀態：**部分減碼 {user_sell_shares:,d} 股**，剩餘 **{curr_available_shares - user_sell_shares:,d} 股** 繼續在倉監控")
+                else:
+                    st.caption(f"ℹ️ 狀態：**全數平倉結案 {user_sell_shares:,d} 股**，該標的將正式移出持倉")
+
+            with c_reason_sel:
+                default_reasons = [
+                    "🛡️ 策略風控減碼 (降持股)",
+                    "🎯 手動獲利了結",
+                    "🛑 手動停損離場",
+                    "⏳ 手動換股平倉",
+                    "🏆 達標全數出場",
+                    "🛡️ 手動保本出場"
+                ]
+                user_exit_reason = st.selectbox("選擇出場/減碼原因", default_reasons, key="sel_exit_reason")
+
+            btn_label = "確認執行平倉／減碼並寫入帳本"
+            if st.button(btn_label, type="primary", use_container_width=True):
                 if matched_pos:
                     today_str = datetime.date.today().strftime("%Y-%m-%d")
                     e_price = float(user_exit_price)
-                    cost = float(matched_pos['total_invested'])
+                    sell_cnt = int(user_sell_shares)
+                    total_orig_shares = int(matched_pos['shares_a'] + matched_pos['shares_b'])
+                    total_orig_cost = float(matched_pos['total_invested'])
                     days = int(matched_pos.get('days_held', 0))
-                    
-                    if matched_pos.get('lot_a_sold'):
-                        shares_b = matched_pos['shares_b']
-                        rev_b = shares_b * e_price * (1 - FEE_RATE - TAX_RATE)
-                        tot_rev = matched_pos['lot_a_revenue'] + rev_b
-                        pnl_b_pct = (e_price - matched_pos['entry_price']) / matched_pos['entry_price'] * 100
-                        pnl_a_pct = matched_pos['lot_a_pnl_pct']
-                    else:
-                        tot_shares = matched_pos['shares_a'] + matched_pos['shares_b']
-                        tot_rev = tot_shares * e_price * (1 - FEE_RATE - TAX_RATE)
-                        pnl_pct = (e_price - matched_pos['entry_price']) / matched_pos['entry_price'] * 100
-                        pnl_a_pct = pnl_pct
-                        pnl_b_pct = pnl_pct
-                        
-                    net_pnl = tot_rev - cost
-                    tot_roi = (net_pnl / cost) * 100
-                    
+
+                    # 1. 計算本次賣出部分的財務數據
+                    cost_ratio = (sell_cnt / total_orig_shares) if total_orig_shares > 0 else 1.0
+                    cost_allocated = total_orig_cost * cost_ratio
+                    gross_rev = sell_cnt * e_price
+                    net_rev = gross_rev * (1 - FEE_RATE - TAX_RATE)
+                    net_pnl = net_rev - cost_allocated
+                    roi_pct = ((net_rev - cost_allocated) / cost_allocated * 100) if cost_allocated > 0 else 0.0
+
+                    reason_final = f"{user_exit_reason} (減碼 {sell_cnt}股 / 餘 {total_orig_shares - sell_cnt}股)" if sell_cnt < total_orig_shares else user_exit_reason
+
+                    # 2. 寫入歷史帳本
                     new_record = {
                         "代號": matched_pos['code'], "名稱": matched_pos['name'],
                         "進場日": matched_pos['entry_date'], "進場價": matched_pos['entry_price'],
-                        "出場日": today_str, "持股天數": days, "投入金額": int(cost),
-                        "回收金額": int(tot_rev), "淨損益(NTD)": int(net_pnl),
-                        "部位A_損益%": round(pnl_a_pct, 2), "部位B_損益%": round(pnl_b_pct, 2),
-                        "綜合報酬率%": round(tot_roi, 2), "出場原因": user_exit_reason
+                        "出場日": today_str, "持股天數": days, "投入金額": int(cost_allocated),
+                        "回收金額": int(net_rev), "淨損益(NTD)": int(net_pnl),
+                        "部位A_損益%": round(roi_pct, 2), "部位B_損益%": round(roi_pct, 2),
+                        "綜合報酬率%": round(roi_pct, 2), "出場原因": reason_final
                     }
-                    
                     df_history = pd.concat([df_history, pd.DataFrame([new_record])], ignore_index=True)
                     save_history_csv(df_history)
-                    positions = [p for p in positions if f"{p['name']} ({p['code']})" != target_to_close]
-                    save_json(POSITIONS_FILE, positions)
-                    st.success(f"✅ 已成功平倉 {target_to_close}！損益：NT$ {int(net_pnl):+,d} ({tot_roi:+.2f}%)！")
+
+                    # 3. 處理剩餘在庫部位
+                    if sell_cnt >= total_orig_shares:
+                        # 全數賣出：自持倉清單中移除
+                        positions = [p for p in positions if f"{p['name']} ({p['code']})" != target_to_close]
+                        save_json(POSITIONS_FILE, positions)
+                        st.success(f"✅ 已成功【全數平倉】{target_to_close}！收回 NT$ {int(net_rev):,d}，損益：NT$ {int(net_pnl):+,d} ({roi_pct:+.2f}%)！")
+                    else:
+                        # 部分減碼：更新剩餘股數與剩餘本金，保留在倉
+                        remaining_shares = total_orig_shares - sell_cnt
+                        remaining_cost = total_orig_cost - cost_allocated
+                        matched_pos['shares_a'] = remaining_shares // 2
+                        matched_pos['shares_b'] = remaining_shares - matched_pos['shares_a']
+                        matched_pos['total_invested'] = remaining_cost
+                        save_json(POSITIONS_FILE, positions)
+                        st.success(f"✅ 已成功【部分減碼】{target_to_close} {sell_cnt:,d} 股！回收 NT$ {int(net_rev):,d}，損益：NT$ {int(net_pnl):+,d} ({roi_pct:+.2f}%)。剩餘 {remaining_shares:,d} 股繼續在倉監控！")
+                    
                     st.rerun()
 
     # 丟棄誤入持倉
