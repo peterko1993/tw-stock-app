@@ -10,7 +10,7 @@ import requests
 import datetime
 import importlib
 
-st.set_page_config(page_title="短線成長股決策助手 V2.6", page_icon="📈", layout="wide")
+st.set_page_config(page_title="短線成長股決策助手 V2.7", page_icon="📈", layout="wide")
 
 WATCHLIST_FILE = "watchlist.json"
 REPORT_FILE = "radar_report.json"
@@ -89,6 +89,7 @@ def save_history_csv(df):
     with open(HISTORY_FILE, "rb") as f:
         push_file_to_github(HISTORY_FILE, f.read())
 
+# 💡【V2.7 升級】：三維大盤風控 (拉積盤開放 S+A 級進場，維持標準預算，僅回撤達 -10% 才打折)
 @st.cache_data(ttl=1800)
 def get_comprehensive_market_status():
     status_info = {
@@ -150,17 +151,17 @@ def get_comprehensive_market_status():
         status_info["budget_factor"] = 0.0
     elif not otc_ok or is_poor_breadth:
         status_info["env_level"] = "YELLOW"
-        status_info["env_title"] = "🟡 結構背離／拉積盤警訊（中小型股走弱）"
+        status_info["env_title"] = "🟡 結構背離／拉積盤提醒（中小型股整理）"
         reasons = []
         if not otc_ok: reasons.append("櫃買指數 (OTC) 跌破月線")
-        if is_poor_breadth: reasons.append(f"下跌家數 ({down_s}) 遠多於上漲家數 ({up_s})")
-        status_info["env_desc"] = f"偵測到 {' 且 '.join(reasons)}。外資可能拉權值掩護出貨，建議開倉預算降為 7 折（14 萬），且僅限 S 級標的進場！"
-        status_info["budget_factor"] = 0.7
+        if is_poor_breadth: reasons.append(f"下跌家數 ({down_s}) 明顯多於上漲家數 ({up_s})")
+        status_info["env_desc"] = f"偵測到 {' 且 '.join(reasons)}。依 V2.7 攻守平衡策略：維持 20 萬元標準預算，但嚴選 👑 S 級與 🎯 A 級高動能標的進場（暫緩 B 級）！"
+        status_info["budget_factor"] = 1.0
     else:
         status_info["env_level"] = "GREEN"
         status_info["env_title"] = "🟢 全面多頭健康（加權與櫃買同步站穩月線）"
         adl_str = f"（上漲 {up_s} 檔 vs 下跌 {down_s} 檔，市場廣度良好）" if status_info["has_adl"] else ""
-        status_info["env_desc"] = f"權值與中小型股齊步走多{adl_str}，資金環境健康，允許 100% 槽位配置。"
+        status_info["env_desc"] = f"權值與中小型股齊步走多{adl_str}，資金環境健康，允許 100% 槽位配置（S / A / B 級皆可進場）。"
         status_info["budget_factor"] = 1.0
 
     return status_info
@@ -246,9 +247,10 @@ with st.sidebar:
         stop_loss_pct = st.slider("硬停損比例 (-%)", 2.0, 8.0, 4.0, 0.5)
         take_profit_pct = st.slider("階段一停利目標 (+%)", 5.0, 15.0, 8.0, 0.5)
 
-    with st.expander("⚙️ 技術面閥值設定", expanded=False):
+    with st.expander("⚙️ 技術面閥值設定 (V2.7)", expanded=False):
         buffer_pct = st.slider("均線回測緩衝 (%)", 0.5, 3.0, 1.8, 0.1)
         k_body_limit = st.slider("K棒實體振幅上限 (%)", 1.0, 5.0, 3.5, 0.5)
+        rsi_upper_limit = st.slider("RSI 多方蓄勢上限", 60.0, 75.0, 70.0, 1.0)
         vol_mode = st.radio("成交量萎縮標準", ["嚴格（低於 5MV 且 20MV）", "標準（低於 5MV 或 20MV）"], index=0)
 
     st.header("📋 觀察名單管理")
@@ -280,7 +282,7 @@ with st.sidebar:
         st.success("已還原預設自選清單！")
         st.rerun()
 
-st.title("📈 短線成長股・量縮深蹲指示器 V2.6 (三維大盤風控版)")
+st.title("📈 短線成長股・量縮深蹲指示器 V2.7 (攻守平衡旗艦版)")
 
 mkt_env = get_comprehensive_market_status()
 if mkt_env["env_level"] == "GREEN":
@@ -296,19 +298,19 @@ tab_radar, tab_tracker, tab_batch, tab_single, tab_watchlist, tab_docs = st.tabs
     "🚀 自選名單批次體檢", 
     "🔍 個股深入技術體檢", 
     "📋 自選股票清單總覽 (TAB 5)",
-    "📖 策略手冊與 SOP 指南 V2.6"
+    "📖 策略手冊與 SOP 指南 V2.7"
 ])
 
 # ================= TAB 0: 每日雷達戰報 =================
 with tab_radar:
     c_title, c_scan = st.columns([3, 1.3])
     with c_title:
-        st.subheader("📡 全自動獵股雷達・今日盤後戰報")
+        st.subheader("📡 全自動獵股雷達・今日盤後戰報 (V2.7)")
     with c_scan:
         btn_manual_scan = st.button("⚡ 手動立即掃描雷達", type="primary", use_container_width=True)
 
     if btn_manual_scan:
-        with st.spinner("🚀 正在檢驗昨日突破建倉，並連線證交所產出今日雷達戰報... (約需 15~20 秒)"):
+        with st.spinner("🚀 正在檢驗昨日突破建倉，並以 V2.7 參數連線證交所產出今日雷達戰報... (約需 15~20 秒)"):
             try:
                 import tracker
                 import screener
@@ -328,7 +330,7 @@ with tab_radar:
                     with open(HISTORY_FILE, "rb") as f:
                         push_file_to_github(HISTORY_FILE, f.read())
 
-                st.success("✅ 昨日突破建倉結算與今日雷達掃描已完成，已同步至 GitHub！")
+                st.success("✅ 昨日突破建倉結算與今日 V2.7 雷達掃描已完成，已同步至 GitHub！")
                 st.rerun()
             except Exception as e:
                 st.error(f"❌ 手動掃描異常: {e}")
@@ -350,8 +352,8 @@ with tab_radar:
             st.error("🛑 **【風控攔截】：加權指數跌破月線，依防禦 SOP 建議全市場雷達強制休眠，暫不建新倉！**")
         elif squat_stocks:
             if mkt_env["env_level"] == "YELLOW":
-                st.warning("⚠️ **【拉積盤風控提醒】：櫃買走弱或下跌家數偏多，建議單筆下單預算打 7 折（14 萬），並優先鎖定 👑 S 級標的！**")
-            st.success(f"🎯 **【今日焦點】：共發現 {len(squat_stocks)} 檔精準符合「量縮深蹲 ＋ RSI蓄勢」進場門檻！**")
+                st.warning("⚠️ **【V2.7 拉積盤攻守平衡提醒】：櫃買整理或下跌家數偏多，建議鎖定 👑 S 級與 🎯 A 級高動能標的進場（暫緩 B 級），下單預算維持 20 萬元標準配置！**")
+            st.success(f"🎯 **【今日焦點】：共發現 {len(squat_stocks)} 檔精準符合「量縮深蹲 ＋ RSI(40～70)蓄勢」進場門檻！**")
             
             for s in squat_stocks:
                 s_name = s.get('name', '')
@@ -367,7 +369,7 @@ with tab_radar:
                     
                     c2.write(f"• **投信買超**：`+{s['trust_buy']}` 張")
                     c2.write(f"• **營收 YoY**：`+{s['rev_yoy']}%`")
-                    c2.write(f"• **RSI (14)**：`{s.get('rsi', '-')}` (40～65蓄勢)")
+                    c2.write(f"• **RSI (14)**：`{s.get('rsi', '-')}` (40～70蓄勢)")
                     
                     c3.write(f"• **KD 姿態**：`{s.get('kd_desc', '-')}`")
                     c3.write(f"• **MACD 動能**：`{s.get('macd_desc', '-')}`")
@@ -408,15 +410,21 @@ with tab_tracker:
     ])
 
     total_trades = len(df_history)
+    is_dd_meltdown = False
     if total_trades > 0:
         wins = df_history[df_history['綜合報酬率%'] > 0]
         win_rate = len(wins) / total_trades * 100
         total_pnl = df_history['淨損益(NTD)'].sum()
         avg_days = df_history['持股天數'].mean()
+        # 計算歷史累積淨值是否觸發 -10% 熔斷
+        eq_curve = 600000.0 + df_history['淨損益(NTD)'].cumsum()
+        peak_eq = max(600000.0, eq_curve.max())
+        curr_dd = (eq_curve.iloc[-1] - peak_eq) / peak_eq
+        if curr_dd <= -0.10:
+            is_dd_meltdown = True
     else:
         win_rate, total_pnl, avg_days = 0.0, 0, 0.0
 
-    # 手機友善：頂部重要數據以 2x2 或 3+2 呈現
     m1, m2, m3 = st.columns(3)
     m1.metric("在倉持股", f"{len(positions)} / 3 檔")
     m2.metric("已結案", f"{total_trades} 筆")
@@ -473,10 +481,12 @@ with tab_tracker:
     else:
         st.info("目前無在倉持股，現金池 100% 待命。")
 
-    # 手動快速補登開倉
+    # 1. 手動快速補登開倉
     with st.expander("➕ 手動快速補登開倉（可自訂實際買進股數與投入金額）", expanded=False):
-        if mkt_env["env_level"] == "YELLOW":
-            st.warning("⚠️ 目前處於拉積盤警訊，建議本筆下單預算打 7 折（約 14 萬元），並優先開倉 S 級標的！")
+        if is_dd_meltdown:
+            st.warning("⚠️ 帳戶歷程回撤已達 -10% 防禦熔斷線，建議本筆下單預算打 7 折（約 14 萬元）！")
+        elif mkt_env["env_level"] == "YELLOW":
+            st.info("💡 目前為拉積盤環境，依 V2.7 策略維持 20 萬元標準預算，請優先登錄 👑 S 級與 🎯 A 級標的！")
         else:
             st.info("💡 在此可直接輸入真實券商對帳單的實際買進價格、實際股數與扣款總額，損益計算將 100% 精準吻合！")
             
@@ -488,7 +498,8 @@ with tab_tracker:
         with c_add3:
             in_entry_date = st.text_input("進場日期 (YYYY-MM-DD)", value="2026-10-08", key="in_manual_date")
 
-        suggested_budget = 200000.0 * mkt_env["budget_factor"]
+        active_budget_factor = 0.7 if is_dd_meltdown else 1.0
+        suggested_budget = 200000.0 * active_budget_factor
         est_shares = int(suggested_budget / (float(in_buy_price) * (1 + FEE_RATE))) if float(in_buy_price) > 0 else 1000
         
         c_add4, c_add5 = st.columns(2)
@@ -532,7 +543,7 @@ with tab_tracker:
                 st.success(f"✅ 成功將 {s_name} ({clean_c}) 加入方案 B！股數：{tot_shares:,d} 股，本金：NT$ {int(cost):,d}")
                 st.rerun()
 
-    # 校正在倉持股資訊
+    # 2. 校正在倉持股資訊
     with st.expander("✏️ 校正在倉部位資訊（修正進場日期、成本、股數或總本金）", expanded=False):
         if positions:
             st.info("若系統自動開倉的 20 萬與真實券商扣款金額有落差，可在此直接校正為精確數字！")
@@ -568,7 +579,7 @@ with tab_tracker:
                     st.success(f"✅ 已成功將 {edit_target} 校正！總股數：{int(new_shares):,d} 股，實際本金：NT$ {int(new_cost):,d}！")
                     st.rerun()
 
-    # 手動平倉與部分減倉
+    # 3. 手動平倉與部分減倉
     with st.expander("🎯 手動平倉與部分減倉（自訂賣出股數與成交價，支援降低持股）", expanded=False):
         st.info("💡 支援全數清倉與「部分減倉」！若因大盤背離或防禦 SOP 需降低持股，可輸入賣出股數，系統會依比例結算損益並保留剩餘部位在倉監控。")
         if positions:
@@ -652,7 +663,7 @@ with tab_tracker:
                     
                     st.rerun()
 
-    # 丟棄誤入持倉
+    # 4. 丟棄誤入持倉
     with st.expander("🗑️ 手動刪除未建倉或誤入之虛擬部位 (不計入歷史損益)", expanded=False):
         if positions:
             del_pos_target = st.selectbox("選擇要丟棄的虛擬部位", options=[f"{p['name']} ({p['code']})" for p in positions], key="sel_discard_pos")
@@ -662,7 +673,7 @@ with tab_tracker:
                 st.success(f"已從帳本中刪除 {del_pos_target}！")
                 st.rerun()
 
-    # 誤結案一鍵還原控制台
+    # 5. 誤結案一鍵還原控制台
     if not df_history.empty:
         with st.expander("🔄 誤結案一鍵還原（撤回歷史紀錄並重返在倉監控）", expanded=False):
             st.info("若某筆交易因盤中早盤低點或誤觸停損出場，可在此撤回結案紀錄，恢復至在倉監控！")
@@ -728,7 +739,7 @@ with tab_tracker:
                     st.success(f"✅ 已從歷史明細表中刪除 {cand_row['名稱']}！")
                     st.rerun()
 
-    # 校正歷史結案紀錄
+    # 6. 校正歷史結案紀錄
     if not df_history.empty:
         with st.expander("✏️ 校正歷史結案紀錄（修改實際賣出價格與損益精算）", expanded=False):
             st.info("💡 若系統自動觸發出場時紀錄的價格與券商真實成交價有微幅落差，可在此填入真實賣出價，系統將自動重新計算淨損益與報酬率！")
@@ -773,7 +784,7 @@ with tab_tracker:
     if not df_history.empty:
         st.dataframe(df_history, use_container_width=True, hide_index=True)
 
-        # 💡【手機優化版】：歷史結案視覺化統計儀表板 (單欄全寬垂直流動，拒絕擠壓)
+        # 手機優化版：歷史結案視覺化統計儀表板 (單欄全寬垂直流動)
         st.write("---")
         st.markdown("#### 📊 【歷史結案視覺化統計儀表板】")
         
@@ -783,7 +794,6 @@ with tab_tracker:
         df_plot['累計回收'] = df_plot['回收金額'].cumsum()
         df_plot['累計淨損益'] = df_plot['淨損益(NTD)'].cumsum()
 
-        # 頂部關鍵財務看板 (手機友善 2x2 排版)
         total_invested_rolling = df_plot['投入金額'].sum()
         total_pnl_val = df_plot['淨損益(NTD)'].sum()
         total_roi_val = (total_pnl_val / total_invested_rolling * 100) if total_invested_rolling > 0 else 0.0
@@ -804,7 +814,7 @@ with tab_tracker:
 
         st.write("---")
 
-        # 📱 圖表 1：累計投入成本 vs. 累計淨盈虧走勢 (全寬單圖，拉開左右 Y 軸)
+        # 📱 圖表 1：累計投入成本 vs. 累計淨盈虧走勢
         st.markdown("##### 📈 1. 累計投入成本 vs. 累計淨盈虧走勢")
         fig1 = make_subplots(specs=[[{"secondary_y": True}]])
         fig1.add_trace(
@@ -841,7 +851,7 @@ with tab_tracker:
         )
         st.plotly_chart(fig1, use_container_width=True, config={'displayModeBar': False})
 
-        # 📱 圖表 2：每筆交易實質損益金額 (全寬長條圖)
+        # 📱 圖表 2：每筆交易實質損益金額
         st.markdown("##### 📊 2. 每筆交易實質損益與報酬率")
         bar_colors = ['#eb4034' if x >= 0 else '#2ba84a' for x in df_plot['淨損益(NTD)']]
         bar_texts = [f"{amt:+,d} ({roi:+.1f}%)" for amt, roi in zip(df_plot['淨損益(NTD)'], df_plot['綜合報酬率%'])]
@@ -859,7 +869,7 @@ with tab_tracker:
         )
         st.plotly_chart(fig2, use_container_width=True, config={'displayModeBar': False})
 
-        # 📱 圖表 3 與 4：甜甜圈圖與持股天數 (手機依序全寬展示)
+        # 📱 圖表 3：出場原因甜甜圈圖
         st.markdown("##### 🍩 3. SOP 出場原因結構佔比")
         reason_counts = df_plot['出場原因'].apply(lambda x: str(x).split(' (')[0]).value_counts()
         fig3 = go.Figure(go.Pie(
@@ -876,6 +886,7 @@ with tab_tracker:
         )
         st.plotly_chart(fig3, use_container_width=True, config={'displayModeBar': False})
 
+        # 📱 圖表 4：持股天數與獲利效率對照
         st.markdown("##### ⏱️ 4. 持股天數與獲利效率對照")
         fig4 = go.Figure(go.Bar(
             x=df_plot['交易序號'],
@@ -896,8 +907,8 @@ with tab_tracker:
 
 # ================= TAB 2: 自選名單批次體檢 =================
 with tab_batch:
-    st.subheader("📋 自選股今日深蹲訊號掃描 (升級三指標共振)")
-    st.write(f"目前自選名單中共有 **{len(st.session_state.watchlist)}** 檔標的。")
+    st.subheader("📋 自選股今日深蹲訊號掃描 (V2.7 升級版)")
+    st.write(f"目前自選名單中共有 **{len(st.session_state.watchlist)}** 檔標的（RSI 蓄勢門檻：`40 ～ {int(rsi_upper_limit)}`）。")
     
     if st.button("⚡ 開始全自選股技術體檢", type="primary", use_container_width=True):
         progress_text = st.empty()
@@ -964,7 +975,7 @@ with tab_batch:
                 cond_support = touch_10 or touch_20
                 cond_vol = (vol < vol_ma5) and (vol < vol_ma20) if "嚴格" in vol_mode else (vol < vol_ma5) or (vol < vol_ma20)
                 cond_k = (abs(close - open_p) / open_p * 100) <= k_body_limit
-                cond_rsi = (40.0 <= rsi_val <= 65.0)
+                cond_rsi = (40.0 <= rsi_val <= rsi_upper_limit)
 
                 target_ma = ma10 if touch_10 else ma20
                 support_name = "10MA" if touch_10 else ("20MA" if touch_20 else "未回踩")
@@ -994,7 +1005,7 @@ with tab_batch:
                     if not cond_support: reasons.append("未回踩支撐")
                     if not cond_vol: reasons.append("未達量縮")
                     if not cond_k: reasons.append(f"實體 > {k_body_limit}%")
-                    if not cond_rsi: reasons.append(f"RSI={rsi_val:.1f} (不在40~65)")
+                    if not cond_rsi: reasons.append(f"RSI={rsi_val:.1f} (不在40～{int(rsi_upper_limit)})")
                     waiting_list.append({"股票標的": label, "最新收盤": f"${close:,.1f}", "未符合原因": "、".join(reasons)})
             except Exception: pass
             progress_bar.progress((idx + 1) / total_items)
@@ -1003,7 +1014,7 @@ with tab_batch:
         progress_bar.empty()
 
         if triggered_list:
-            st.success(f"🎯 **自選股中今日共發現 {len(triggered_list)} 檔符合深蹲條件！**")
+            st.success(f"🎯 **自選股中今日共發現 {len(triggered_list)} 檔符合 V2.7 深蹲條件！**")
             st.dataframe(pd.DataFrame(triggered_list), use_container_width=True, hide_index=True)
         else:
             st.warning(" 今日自選股中無標的符合深蹲條件。")
@@ -1014,7 +1025,7 @@ with tab_batch:
 
 # ================= TAB 3: 個股深入技術體檢 =================
 with tab_single:
-    st.subheader("🔍 個股深入技術診斷與三指標共振分析")
+    st.subheader("🔍 個股深入技術診斷與三指標共振分析 (V2.7)")
     options_list = list(st.session_state.watchlist.keys()) + ["✏️ 臨時手動輸入其他代號"]
     selected_option = st.selectbox("選擇診斷標的：", options=options_list, index=0)
     
@@ -1067,7 +1078,7 @@ with tab_single:
                 cond_support = (low <= target_ma * buf) and (close >= target_ma * 0.99)
                 cond_vol = (vol < vol_ma5) and (vol < vol_ma20) if "嚴格" in vol_mode else (vol < vol_ma5) or (vol < vol_ma20)
                 cond_k = (abs(close - open_p) / open_p * 100) <= k_body_limit
-                cond_rsi = (40.0 <= rsi_val <= 65.0)
+                cond_rsi = (40.0 <= rsi_val <= rsi_upper_limit)
                 is_ready = cond_trend and cond_support and cond_vol and cond_k and cond_rsi
 
                 c_out1, c_out2, c_out3, c_out4 = st.columns(4)
@@ -1079,7 +1090,7 @@ with tab_single:
                 if is_ready:
                     sl_p = high * (1 - stop_loss_pct / 100)
                     tp_p = high * (1 + take_profit_pct / 100)
-                    st.success(f"🎯 **【{display_title} 觸發訊號】：符合量縮深蹲 ＋ RSI 蓄勢門檻！**")
+                    st.success(f"🎯 **【{display_title} 觸發訊號】：符合 V2.7 量縮深蹲 ＋ RSI(40～70) 蓄勢門檻！**")
                     st.markdown(f"""
                     * 🎯 **明日右側確認進場價**：`盤中突破今日高點 ${high:,.1f} 才可掛單`
                     * 🛑 **硬停損價 (-{stop_loss_pct}%)**：`${sl_p:,.1f}`
@@ -1099,7 +1110,7 @@ with tab_single:
 
 # ================= TAB 5: 自選股票清單總覽 =================
 with tab_watchlist:
-    st.subheader("📋 自選股票清單總覽儀表板 (Watchlist Overview)")
+    st.subheader("📋 自選股票清單總覽儀表板 (Watchlist Overview V2.7)")
     
     with st.expander("⚙️ 快速管理自選名單 (在此新增 / 剔除標的)", expanded=False):
         c_add, c_del = st.columns(2)
@@ -1241,7 +1252,8 @@ with tab_watchlist:
                     cond_support = touch_10 or touch_20
                     cond_vol = (vol < vol_ma5)
                     cond_k = (abs(c_today - open_p) / open_p <= 0.035)
-                    cond_rsi_hard = (40.0 <= rsi_val <= 65.0)
+                    # 💡 V2.7 RSI 蓄勢門檻 40 ~ 70
+                    cond_rsi_hard = (40.0 <= rsi_val <= rsi_upper_limit)
 
                     is_squat = cond_trend and cond_support and cond_vol and cond_k and cond_rsi_hard
 
@@ -1313,42 +1325,42 @@ with tab_watchlist:
             nc3.markdown(f"**[📊 鉅亨網法人動態與營收走勢]**(https://invest.cnyes.com/twstock/TWS/{clean_c}/news)")
             nc3.caption("三大法人買賣超與業績解析")
 
-# ================= TAB 4: 策略手冊與 SOP 指南 (V2.6 升級版) =================
+# ================= TAB 4: 策略手冊與 SOP 指南 (V2.7 攻守平衡旗艦版) =================
 with tab_docs:
-    st.subheader("📖 短線成長股・量縮深蹲 (Squat & Rebound) 全流程作戰手冊 V2.6")
-    st.info("💡 本系統專為「不盯盤、每日 16:30 離線決策、次日開盤智慧單自動執行」設計，經量化回測與三維風控完整實證。")
+    st.subheader("📖 短線成長股・量縮深蹲 (Squat & Rebound) 全流程作戰手冊 V2.7")
+    st.info("💡 本系統專為「不盯盤、每日 16:30 離線決策、次日開盤智慧單自動執行」設計。V2.7 經兩年大數據回測實證：總報酬率 +82.41%、勝率 32.0%、賺賠比 3.60、最大回撤壓制於 -9.64%。")
 
     with st.expander("🔍 一、 盤後全自動獵股漏斗 SOP（3 → 1 → 2 順序過濾）", expanded=True):
-        st.write("• **步驟 3【籌碼鎖定度與階梯門檻】**：最新日投信買超 >= 50 張；若股本在 60 億～150 億，門檻提高至 >= 250 張。")
+        st.write("• **步驟 3【籌碼鎖定度與 7 日累計動能】**：最新日投信買超 >= 50 張（且近 7 日累計買超中型股 >= 100 張、大型股 >= 250 張），包容主力「吃貨 → 縮手深蹲 → 點火」三部曲。")
         st.write("• **步驟 1【放寬股本規模 (20億～150億)】**：鎖定 20～60 億中型成長股與 60～150 億旗艦領頭羊（如欣興、技嘉），排除 > 150 億權值牛皮股。")
         st.write("• **步驟 2【業績加速動能】**：最新公告單月營收年增率 YoY > 20%，具實質基本面保護。")
 
-    with st.expander("🧘 二、 盤後「量縮深蹲 (Squat)」技術面檢驗 SOP (升級 V2.5)", expanded=True):
+    with st.expander("🧘 二、 盤後「量縮深蹲 (Squat)」技術面檢驗 SOP (V2.7 升級)", expanded=True):
         st.write("• **條件 1【均線多頭排列】**：收盤價位於多頭排列（5MA > 10MA > 20MA），且 20 日均線（月線）斜率向上。")
         st.write("• **條件 2【均線精確回踩】**：最低價回測 10MA 或 20MA 緩衝區（Low <= MA * 1.018），收盤未跌破（Close >= MA * 0.99）。")
         st.write("• **條件 3【極致成交窒息量】**：當日成交量同時低於 5 日均量（5MV）與 20 日均量（20MV），代表浮額洗淨。")
         st.write("• **條件 4【K 棒實體收斂】**：當日 K 棒實體振幅 <= 3.5%，禁止長黑摜壓實體。")
-        st.write("• **條件 5【RSI 多方蓄勢中軸 (回測驗證最佳單因子)】**：14 日 RSI 必須介於 40 ～ 65 之間。實測總報酬提升至 +23.13%、勝率提升近 5%、MDD 壓低至 -5.53%，徹底剃除弱勢破底股。")
+        st.write("• **條件 5【RSI 多方強勢蓄勢區 (40 ～ 70)】**：14 日 RSI 介於 40 ～ 70 之間。既剔除 < 40 的弱勢破底股與 > 70 的極端追高股，同時完整保留多頭主升段在 65～70 強勢換氣的領頭羊。")
 
     with st.expander("🌟 三、 獵股品質「動能共振星級評級 (Signal Quality)」", expanded=True):
-        st.write("• **👑 頂級三指標共振 (S 級)**：符合深蹲 + RSI(14) 守穩 40～65 + MACD(零軸上綠縮/翻紅) + KD(30～65區間打勾金叉)。多方動能最強，列為第一優先下單目標！")
+        st.write("• **👑 頂級三指標共振 (S 級)**：符合深蹲 + RSI(14) 守穩 40～70 + MACD(零軸上綠縮/翻紅) + KD(30～65區間打勾金叉)。多方動能最強，第一優先下單目標！")
         st.write("• **🎯 強勢動能深蹲 (A 級)**：符合核心深蹲 + RSI 守穩 + MACD 或 KD 其一亮燈。")
         st.write("• **🟢 標準量縮深蹲 (B 級)**：符合核心深蹲 + RSI 守穩，籌碼沉澱完畢。")
 
-    with st.expander("🛡️ 四、 盤中「右側確認」與三維大盤風控進場 SOP (V2.6 重大升級)", expanded=True):
+    with st.expander("🛡️ 四、 盤中「右側確認」與三維大盤攻守平衡 SOP (V2.7 核心升級)", expanded=True):
         st.write("• **第一維【權值大盤加權指數】**：加權指數收盤必須站穩 20MA（月線）之上。若大盤處於月線反壓，全市場雷達強制休眠。")
-        st.write("• **第二維【中小型櫃買指數 (OTC)】**：櫃買指數必須站穩 20MA 之上。若加權漲但櫃買跌破月線，判定為『拉積盤』，新開倉單筆預算自動打 7 折（14 萬），且僅准 S 級進場。")
-        st.write("• **第三維【市場騰落結構 (ADL)】**：全市場下跌家數若大於上漲家數 1.5 倍，視為內部結構背離，同樣觸發防禦降額機制。")
+        st.write("• **第二維【中小型櫃買指數 (OTC) 攻守平衡】**：若加權漲但櫃買跌破月線（拉積盤），維持 20 萬標準預算，並開放『👑 S 級 ＋ 🎯 A 級』進場（僅暫緩 B 級），兼顧風險與飆股捕獲率。")
+        st.write("• **第三維【市場騰落結構 (ADL)】**：全市場下跌家數若大於上漲家數 1.5 倍，自動觸發黃燈提醒，集中火力於 S / A 級標的。")
         st.write("• **次日右側過高確認】**：訊號成立次日，盤中最高價突破深蹲日最高點才准掛單進場；未突破則一律放棄建倉。")
 
-    with st.expander("🛑 五、 嚴格五大出場紀律 SOP（含智慧展延防護）", expanded=True):
+    with st.expander("🛑 五、 嚴格五大出場紀律 SOP（含 Day-0 防誤殺與智慧展延）", expanded=True):
         st.write("• **🛑 防線 1【硬停損線 (-4.0%)】**：跌破成本價之 -4.0%，無條件市價全數砍單。首日（Day 0）以收盤價防守避免早盤低點誤殺，次日起恢復盤中最低價監控。")
-        st.write("• **⏳ 防線 2【時間停損 (4個交易日 / 最多展延至7天)】**：持有滿 4 個實際交易日漲幅未達 +3% 則平手換股。**若持有期間再次符合雷達深蹲且帳面維持成本之上，自動展延 1 次至滿 7 個交易日**。**執行流程為『當天 16:30 確認，次個交易日開盤撮合出清』**。")
+        st.write("• **⏳ 防線 2【時間停損 (4個交易日 / 最多展延至7天)】**：持有滿 4 個實際交易日漲幅未達 +3% 則於次日開盤換股出清。**若持有期間再次符合雷達深蹲且帳面維持成本之上，自動展延 1 次至滿 7 個交易日**。")
         st.write("• **🛡️ 防線 3【動態保本機制 (+4.0%)】**：盤中浮盈達 +4.0% 時，次日起停損防線調升至成本價 (+0.2%)，消滅賺變賠。")
         st.write("• **🎯 防線 4【第一階段停利 (+8.0%)】**：觸及成本價 +8.0% 時，掛單賣出部位 A（50% 股數）鎖住勝果。")
         st.write("• **🏄 防線 5【第二階段波段落袋 (破 10MA)】**：剩餘部位 B 只要收盤跌破 10MA，次個交易日開盤市價出清。")
         st.write("• **❄️ 防線 6【停損冷卻機制】**：若觸發硬停損，7～10 個交易日內禁止重複買進同一檔股票。")
 
     with st.expander("💼 六、 60 萬元資金與部位管理模型 SOP", expanded=True):
-        st.write("• **三槽位配置**：總資金 60 萬元切分為 3 槽位，每槽上限 20 萬元。單筆極限虧損鎖死在總資金之 1.33%。")
-        st.write("• **結構背離與回撤熔斷**：當市場出現『拉積盤』或歷程回撤超 -10% 時，槽位下單預算降為 14 萬元（7 折），防禦至盤勢恢復全面健康。")
+        st.write("• **三槽位配置**：總資金 60 萬元切分為 3 槽位，每槽標準上限 20 萬元。單筆極限虧損鎖死在總資金之 1.33%。")
+        st.write("• **回撤熔斷機制**：僅當帳戶實際累積淨值自高點回撤達 -10% 時，槽位下單預算才自動降為 14 萬元（7 折），防禦至淨值回升。")
