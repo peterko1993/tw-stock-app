@@ -1,17 +1,14 @@
 import requests
 import pandas as pd
-import numpy as np
-import datetime
 import yfinance as yf
 import json
+import datetime
 import os
+import time
 
 REPORT_FILE = "radar_report.json"
 PENDING_FILE = "pending_orders.json"
-
-headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-}
+POSITIONS_FILE = "positions.json"
 
 TW_INDUSTRY_MAP = {
     "01": "水泥工業", "02": "食品工業", "03": "塑膠工業", "04": "紡織纖維",
@@ -41,202 +38,283 @@ def load_json(filepath, default):
         with open(filepath, "r", encoding="utf-8") as f: return json.load(f)
     except Exception: return default
 
-def run_screener():
-    print("🚀 [1/4] 正在抓取證交所三大法人日報 (T86)...")
-    today = datetime.date.today()
-    df_t86 = None
-    trade_date = None
+def save_json(filepath, data):
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
-    for delta in range(7):
-        target_date = today - datetime.timedelta(days=delta)
-        date_str = target_date.strftime("%Y%m%d")
-        url = f"https://www.twse.com.tw/rwd/zh/fund/T86?response=json&date={date_str}&selectType=ALLBUT0999"
+def get_company_profiles():
+    profiles = {}
+    headers = {"User-Agent": "Mozilla/5.0"}
+    # 上市
+    try:
+        r1 = requests.get("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", headers=headers, timeout=10)
+        if r1.status_code == 200:
+            for item in r1.json():
+                c = str(item.get("公司代號", "")).strip()
+                n = str(item.get("公司簡稱", "") or item.get("公司名稱", "")).strip()
+                cap = float(item.get("實收資本額", 0)) / 100_000_000
+                ind = translate_industry(item.get("產業別", ""))
+                if len(c) == 4 and c.isdigit():
+                    profiles[c] = {"name": n, "cap": round(cap, 1), "market": ".TW", "industry": ind}
+    except Exception as e:
+        print(f"上市基本資料抓取異常: {e}")
+
+    # 上櫃
+    try:
+        r2 = requests.get("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O", headers=headers, timeout=10)
+        if r2.status_code == 200:
+            for item in r2.json():
+                c = str(item.get("SecuritiesCompanyCode", "") or item.get("公司代號", "")).strip()
+                n = str(item.get("CompanyBriefName", "") or item.get("公司簡稱", "")).strip()
+                cap_raw = float(item.get("PaidInCapital", 0) or item.get("實收資本額", 0))
+                cap = cap_raw / 100_000_000
+                ind = translate_industry(item.get("SectorName", "") or item.get("產業別", ""))
+                if len(c) == 4 and c.isdigit():
+                    profiles[c] = {"name": n, "cap": round(cap, 1), "market": ".TWO", "industry": ind}
+    except Exception as e:
+        print(f"上櫃基本資料抓取異常: {e}")
+
+    return profiles
+
+def get_revenue_map():
+    rev_map = {}
+    headers = {"User-Agent": "Mozilla/5.0"}
+    for url in [
+        "https://openapi.twse.com.tw/v1/opendata/t187ap05_L",
+        "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O"
+    ]:
         try:
-            res = requests.get(url, headers=headers, timeout=10)
-            data = res.json()
-            if data.get("stat") == "OK" and "data" in data and len(data["data"]) > 0:
-                df_t86 = pd.DataFrame(data["data"], columns=data["fields"])
-                trade_date = date_str
-                break
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.status_code == 200:
+                for item in r.json():
+                    c = str(item.get("公司代號", "") or item.get("SecuritiesCompanyCode", "")).strip()
+                    yoy_str = str(item.get("去年同月增減(%)", "") or item.get("營業收入-去年同月增減(%)", "")).replace(",", "").strip()
+                    try:
+                        rev_map[c] = round(float(yoy_str), 2)
+                    except Exception:
+                        pass
         except Exception:
+            pass
+    return rev_map
+
+def get_trust_buy_map():
+    trust_map = {}
+    headers = {"User-Agent": "Mozilla/5.0"}
+    # 嘗試往回找最近 5 個日曆天內有效的證交所 T86 與櫃買三大法人日報
+    for offset in range(0, 6):
+        dt = datetime.date.today() - datetime.timedelta(days=offset)
+        if dt.weekday() >= 5: continue
+        d_twse = dt.strftime("%Y%m%d")
+        try:
+            url_twse = f"https://www.twse.com.tw/rwd/zh/fund/T86?date={d_twse}&selectType=ALLBUT0999&response=json"
+            res = requests.get(url_twse, headers=headers, timeout=8)
+            if res.status_code == 200:
+                j = res.json()
+                if j.get("stat") == "OK" and j.get("data"):
+                    for row in j["data"]:
+                        code = str(row[0]).strip()
+                        if len(code) == 4 and code.isdigit():
+                            # 投信買賣超股數在欄位 index 10
+                            net_shares = int(str(row[10]).replace(",", "").strip())
+                            trust_map[code] = net_shares // 1000
+                    break
+        except Exception:
+            pass
+
+    for offset in range(0, 6):
+        dt = datetime.date.today() - datetime.timedelta(days=offset)
+        if dt.weekday() >= 5: continue
+        roc_yr = dt.year - 1911
+        d_tpex = f"{roc_yr}/{dt.strftime('%m/%d')}"
+        try:
+            url_tpex = f"https://www.tpex.org.tw/web/stock/3insti/daily_trade/3itrade_hedge_result.php?l=zh-tw&se=EW&t=D&d={d_tpex}&o=json"
+            res = requests.get(url_tpex, headers=headers, timeout=8)
+            if res.status_code == 200:
+                j = res.json()
+                rows = j.get("aaData") or j.get("tables", [{}])[0].get("data", [])
+                if rows:
+                    for row in rows:
+                        code = str(row[0]).strip()
+                        if len(code) == 4 and code.isdigit():
+                            try:
+                                net_shares = int(str(row[13]).replace(",", "").strip())
+                                trust_map[code] = net_shares // 1000
+                            except Exception:
+                                pass
+                    break
+        except Exception:
+            pass
+
+    return trust_map
+
+def run_screener():
+    print("📡 [Screener V2.7] 啟動全自動獵股漏斗 (3 -> 1 -> 2)...")
+    profiles = get_company_profiles()
+    rev_map = get_revenue_map()
+    trust_map = get_trust_buy_map()
+
+    funnel_candidates = []
+    for code, net_lots in trust_map.items():
+        if net_lots < 50:
+            continue
+        p = profiles.get(code)
+        if not p:
+            continue
+        cap = p["cap"]
+        # 步驟 1 & 3：股本 20~150 億階梯門檻
+        if not (20.0 <= cap <= 150.0):
+            continue
+        if cap > 60.0 and net_lots < 250:
             continue
 
-    if df_t86 is None:
-        print("❌ 無法取得法人日報，終止執行。")
-        return
+        # 步驟 2：月營收 YoY > 20%
+        yoy = rev_map.get(code, None)
+        if yoy is None or yoy <= 20.0:
+            continue
 
-    # 步驟 3：籌碼基礎過濾
-    df_t86 = df_t86[df_t86['證券代號'].str.match(r'^\d{4}$')]
-    trust_col = [c for c in df_t86.columns if "投信" in c and "買賣超" in c][0]
-    df_t86['投信買賣超張數'] = df_t86[trust_col].str.replace(',', '').astype(float) / 1000
-    df_step3 = df_t86[df_t86['投信買賣超張數'] >= 50][['證券代號', '證券名稱', '投信買賣超張數']].copy()
+        funnel_candidates.append({
+            "code": code,
+            "name": p["name"],
+            "ticker": f"{code}{p['market']}",
+            "cap": cap,
+            "industry": p["industry"],
+            "trust_buy": net_lots,
+            "rev_yoy": yoy
+        })
 
-    # 步驟 1：比對股本規模 (20~150 億)
-    print("📡 [2/4] 比對股本規模 (20億 ~ 150億)...")
-    url_cap = "https://openapi.twse.com.tw/v1/opendata/t187ap03_L"
-    res_cap = requests.get(url_cap, headers=headers, timeout=10)
-    df_cap_raw = pd.DataFrame(res_cap.json())
-    
-    cap_cols = ['公司代號', '實收資本額']
-    if '產業別' in df_cap_raw.columns: cap_cols.append('產業別')
-    df_cap = df_cap_raw[cap_cols].copy()
-    if '產業別' not in df_cap.columns: df_cap['產業別'] = "電子科技"
+    print(f"🔎 通過基本面與籌碼漏斗共 {len(funnel_candidates)} 檔，開始進行 V2.7 量縮深蹲檢驗...")
 
-    df_cap['股本(億)'] = pd.to_numeric(df_cap['實收資本額'], errors='coerce') / 100_000_000
-    df_step1 = pd.merge(df_step3, df_cap, left_on='證券代號', right_on='公司代號', how='inner')
-    
-    cond_mid = (df_step1['股本(億)'] >= 20.0) & (df_step1['股本(億)'] <= 60.0) & (df_step1['投信買賣超張數'] >= 50)
-    cond_large = (df_step1['股本(億)'] > 60.0) & (df_step1['股本(億)'] <= 150.0) & (df_step1['投信買賣超張數'] >= 250)
-    df_step1 = df_step1[cond_mid | cond_large].copy()
+    results = []
+    squat_count = 0
+    today_str = datetime.date.today().strftime("%Y-%m-%d")
 
-    # 步驟 2：比對最新月營收 (YoY > 20%)
-    print("📡 [3/4] 比對最新月營收 (YoY > 20%)...")
-    url_rev = "https://openapi.twse.com.tw/v1/opendata/t187ap05_L"
-    res_rev = requests.get(url_rev, headers=headers, timeout=10)
-    df_rev_raw = pd.DataFrame(res_rev.json())
-    yoy_col = [c for c in df_rev_raw.columns if "去年同月增減" in c][0]
-    df_rev = df_rev_raw[['公司代號', yoy_col]].copy()
-    df_rev['營收YoY(%)'] = pd.to_numeric(df_rev[yoy_col], errors='coerce')
-
-    df_funnel = pd.merge(df_step1, df_rev[['公司代號', '營收YoY(%)']], on='公司代號', how='inner')
-    df_funnel = df_funnel[df_funnel['營收YoY(%)'] > 20.0]
-
-    report_items = []
-    total_squat_count = 0
-    today_squat_candidates = []
-
-    for _, row in df_funnel.iterrows():
-        code = row['證券代號']
-        name = row['證券名稱']
-        ticker = f"{code}.TW"
+    for item in funnel_candidates:
+        ticker = item["ticker"]
         try:
-            df_k = yf.download(ticker, period="4mo", interval="1d", progress=False)
-            if df_k.empty or len(df_k) < 30: continue
-            if isinstance(df_k.columns, pd.MultiIndex): df_k.columns = df_k.columns.get_level_values(0)
+            df = yf.download(ticker, period="6mo", interval="1d", progress=False)
+            if df.empty or len(df) < 35:
+                continue
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
 
-            df_k['MA5'] = df_k['Close'].rolling(5).mean()
-            df_k['MA10'] = df_k['Close'].rolling(10).mean()
-            df_k['MA20'] = df_k['Close'].rolling(20).mean()
-            df_k['VOL_MA5'] = df_k['Volume'].rolling(5).mean()
-            df_k['VOL_MA20'] = df_k['Volume'].rolling(20).mean()
+            df['MA5'] = df['Close'].rolling(5).mean()
+            df['MA10'] = df['Close'].rolling(10).mean()
+            df['MA20'] = df['Close'].rolling(20).mean()
+            df['VOL_MA5'] = df['Volume'].rolling(5).mean()
+            df['VOL_MA20'] = df['Volume'].rolling(20).mean()
 
-            delta = df_k['Close'].diff()
+            # 1. RSI (14)
+            delta = df['Close'].diff()
             gain = delta.clip(lower=0)
             loss = -delta.clip(upper=0)
             avg_gain = gain.ewm(com=13, adjust=False).mean()
             avg_loss = loss.ewm(com=13, adjust=False).mean()
             rs = avg_gain / (avg_loss + 1e-9)
-            df_k['RSI14'] = 100 - (100 / (1 + rs))
+            df['RSI14'] = 100 - (100 / (1 + rs))
 
-            low9 = df_k['Low'].rolling(9).min()
-            high9 = df_k['High'].rolling(9).max()
-            rsv = (df_k['Close'] - low9) / (high9 - low9 + 1e-9) * 100
+            # 2. KD (9, 3, 3)
+            low9 = df['Low'].rolling(9).min()
+            high9 = df['High'].rolling(9).max()
+            rsv = (df['Close'] - low9) / (high9 - low9 + 1e-9) * 100
             k_list, d_list = [50.0], [50.0]
             for r in rsv.fillna(50):
                 new_k = (k_list[-1] * 2 / 3) + (r * 1 / 3)
                 new_d = (d_list[-1] * 2 / 3) + (new_k * 1 / 3)
                 k_list.append(new_k)
                 d_list.append(new_d)
-            df_k['K'] = k_list[1:]
-            df_k['D'] = d_list[1:]
+            df['K'] = k_list[1:]
+            df['D'] = d_list[1:]
 
-            ema12 = df_k['Close'].ewm(span=12, adjust=False).mean()
-            ema26 = df_k['Close'].ewm(span=26, adjust=False).mean()
-            df_k['DIF'] = ema12 - ema26
-            df_k['MACD_SIG'] = df_k['DIF'].ewm(span=9, adjust=False).mean()
-            df_k['OSC'] = df_k['DIF'] - df_k['MACD_SIG']
+            # 3. MACD (12, 26, 9)
+            ema12 = df['Close'].ewm(span=12, adjust=False).mean()
+            ema26 = df['Close'].ewm(span=26, adjust=False).mean()
+            df['DIF'] = ema12 - ema26
+            df['MACD_SIG'] = df['DIF'].ewm(span=9, adjust=False).mean()
+            df['OSC'] = df['DIF'] - df['MACD_SIG']
 
-            latest = df_k.iloc[-1]
-            prev = df_k.iloc[-2]
-            
+            latest = df.iloc[-1]
+            prev = df.iloc[-2]
             close = float(latest['Close'])
-            vol = float(latest['Volume'])
-            low = float(latest['Low'])
-            high = float(latest['High'])
             open_p = float(latest['Open'])
-            ma5 = float(latest['MA5'])
-            ma10 = float(latest['MA10'])
-            ma20 = float(latest['MA20'])
-            vol_ma5 = float(latest['VOL_MA5'])
-            vol_ma20 = float(latest['VOL_MA20'])
+            high = float(latest['High'])
+            low = float(latest['Low'])
+            vol = float(latest['Volume'])
+            ma5, ma10, ma20 = float(latest['MA5']), float(latest['MA10']), float(latest['MA20'])
+            vol_ma5, vol_ma20 = float(latest['VOL_MA5']), float(latest['VOL_MA20'])
             rsi_val = float(latest['RSI14'])
             k_val, d_val = float(latest['K']), float(latest['D'])
-            dif_val, osc_val = float(latest['DIF']), float(latest['OSC'])
+            prev_k = float(prev['K'])
+            dif_val, osc_val, prev_osc = float(latest['DIF']), float(latest['OSC']), float(prev['OSC'])
 
-            cond_trend = (ma5 > ma10) and (ma10 > ma20) and (ma20 > df_k['MA20'].iloc[-4])
-            touch_10 = (low <= ma10 * 1.018 and close >= ma10 * 0.99)
-            touch_20 = (low <= ma20 * 1.018 and close >= ma20 * 0.99)
+            cond_trend = (ma5 > ma10) and (ma10 > ma20) and (ma20 > float(df['MA20'].iloc[-4]))
+            touch_10 = (low <= ma10 * 1.018) and (close >= ma10 * 0.99)
+            touch_20 = (low <= ma20 * 1.018) and (close >= ma20 * 0.99)
             cond_support = touch_10 or touch_20
             cond_vol = (vol < vol_ma5) and (vol < vol_ma20)
-            cond_k = abs(close - open_p) / open_p <= 0.035
-            cond_rsi_hard = (40.0 <= rsi_val <= 65.0)
+            cond_k = (abs(close - open_p) / open_p) <= 0.035
+            # 💡【V2.7 核心升級】：RSI 蓄勢門檻放寬為 40.0 ~ 70.0
+            cond_rsi = (40.0 <= rsi_val <= 70.0)
 
-            is_squat = cond_trend and cond_support and cond_vol and cond_k and cond_rsi_hard
+            is_squat = cond_trend and cond_support and cond_vol and cond_k and cond_rsi
+            support_str = "10MA" if touch_10 else ("20MA" if touch_20 else "未回踩")
 
-            cond_macd_res = (dif_val > 0) and ((osc_val > float(prev['OSC'])) or (osc_val > 0))
-            cond_kd_res = (30.0 <= k_val <= 65.0) and ((k_val > float(prev['K'])) or (k_val >= d_val))
+            cond_macd_res = (dif_val > 0) and ((osc_val > prev_osc) or (osc_val > 0))
+            cond_kd_res = (30.0 <= k_val <= 65.0) and ((k_val > prev_k) or (k_val >= d_val))
 
             if cond_macd_res and cond_kd_res:
-                grade, grade_badge = "S", "👑 頂級三指標共振 (S級)"
+                grade_badge = "👑 頂級共振 (S級)"
             elif cond_macd_res or cond_kd_res:
-                grade, grade_badge = "A", "🎯 強勢動能深蹲 (A級)"
+                grade_badge = "🎯 強勢動能 (A級)"
             else:
-                grade, grade_badge = "B", "🟢 標準量縮深蹲 (B級)"
+                grade_badge = "🟢 標準深蹲 (B級)"
+
+            kd_desc = f"K={k_val:.1f} (打勾/金叉)" if cond_kd_res else f"K={k_val:.1f} (整理中)"
+            macd_desc = "零軸上翻紅/收斂" if cond_macd_res else "動能整理中"
 
             if is_squat:
-                total_squat_count += 1
-                today_squat_candidates.append({
-                    "code": code, "name": name, "ticker": ticker,
-                    "right_trigger": round(high, 1), "high": round(high, 1),
-                    "close": round(close, 1), "scan_date": today.strftime("%Y-%m-%d")
-                })
+                squat_count += 1
 
-            cap_val = round(float(row['股本(億)']), 1)
-            cap_bracket_label = f"{cap_val}億 (中型成長股)" if cap_val <= 60.0 else f"{cap_val}億 (旗艦領頭羊)"
-            target_ma = ma10 if touch_10 else ma20
-            support_name = "10MA" if touch_10 else ("20MA" if touch_20 else "無")
-
-            report_items.append({
-                "name": name, "code": code, "ticker": ticker,
-                "industry": translate_industry(row.get('產業別', '電子科技')),
-                "cap": cap_val, "cap_bracket": cap_bracket_label,
-                "close": round(close, 1), "high": round(high, 1),
-                "right_trigger": round(high, 1), "trust_buy": int(row['投信買賣超張數']),
-                "rev_yoy": round(float(row['營收YoY(%)']), 1), "is_squat": bool(is_squat),
-                "grade": grade, "grade_badge": grade_badge, "rsi": round(rsi_val, 1),
-                "kd_desc": f"K:{round(k_val, 1)} / D:{round(d_val, 1)}",
-                "macd_desc": "零軸上綠縮/翻紅" if cond_macd_res else "整理中",
-                "support": support_name, "buy_min": round(target_ma, 1), "buy_max": round(close, 1),
-                "stop_loss": round(target_ma * 0.96, 1), "take_profit": round(close * 1.08, 1),
-                "scan_date": today.strftime("%Y-%m-%d")
+            item.update({
+                "close": round(close, 1),
+                "high": round(high, 1),
+                "right_trigger": round(high, 1),
+                "support": support_str,
+                "is_squat": bool(is_squat),
+                "rsi": round(rsi_val, 1),
+                "kd_desc": kd_desc,
+                "macd_desc": macd_desc,
+                "grade_badge": grade_badge
             })
-        except Exception:
-            continue
+            results.append(item)
+        except Exception as e:
+            pass
 
-    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    results.sort(key=lambda x: (x.get("is_squat", False), x.get("trust_buy", 0)), reverse=True)
+
     report_data = {
-        "update_time": now_str, "trade_date": trade_date,
-        "total_funnel": len(df_funnel), "total_squat": total_squat_count,
-        "stocks": report_items
+        "update_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "total_funnel": len(funnel_candidates),
+        "total_squat": squat_count,
+        "stocks": results
     }
+    save_json(REPORT_FILE, report_data)
 
-    with open(REPORT_FILE, "w", encoding="utf-8") as f:
-        json.dump(report_data, f, ensure_ascii=False, indent=2)
-
-    # 💡 核心持久化：同步更新待突破候選佇列 (保留昨日與今日標的)
-    existing_pending = load_json(PENDING_FILE, [])
-    # 移除超過 3 天的過期殘留
-    cutoff_d = (today - datetime.timedelta(days=3)).strftime("%Y-%m-%d")
-    clean_pending = [p for p in existing_pending if str(p.get('scan_date', '')) >= cutoff_d]
-    
-    for cand in today_squat_candidates:
-        if not any(p['code'] == cand['code'] for p in clean_pending):
-            clean_pending.append(cand)
-            
-    with open(PENDING_FILE, "w", encoding="utf-8") as f:
-        json.dump(clean_pending, f, ensure_ascii=False, indent=2)
-
-    print(f"✅ 戰報生成完畢！待突破佇列共 {len(clean_pending)} 檔標的待命。")
+    # 將今日符合深蹲之標的寫入 pending_orders.json 供次日追蹤突破建倉
+    positions = load_json(POSITIONS_FILE, [])
+    active_codes = {str(p['code']).split('.')[0].strip() for p in positions}
+    pending_list = []
+    for s in results:
+        if s.get("is_squat") and s["code"] not in active_codes:
+            pending_list.append({
+                "code": s["code"],
+                "name": s["name"],
+                "ticker": s["ticker"],
+                "right_trigger": s["right_trigger"],
+                "scan_date": today_str,
+                "grade_badge": s.get("grade_badge", "🟢 標準深蹲 (B級)")
+            })
+    save_json(PENDING_FILE, pending_list)
+    print(f"✅ [Screener V2.7 完成] 符合深蹲共 {squat_count} 檔，已寫入戰報與待突破佇列！")
 
 if __name__ == "__main__":
     run_screener()
