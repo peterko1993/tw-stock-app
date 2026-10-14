@@ -89,7 +89,23 @@ def save_history_csv(df):
     with open(HISTORY_FILE, "rb") as f:
         push_file_to_github(HISTORY_FILE, f.read())
 
-# 💡【V2.7 升級】：三維大盤風控 (拉積盤開放 S+A 級進場，維持標準預算，僅回撤達 -10% 才打折)
+# ================= 檢查今日是否開盤 =================
+@st.cache_data(ttl=1800)
+def check_is_trading_day():
+    """ 檢查今天台股是否有開盤 (避開國定假日如 10/9 國慶補假) """
+    try:
+        df = yf.download("^TWII", period="5d", progress=False)
+        if df.empty: return False
+        if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+        if df.index.tz is not None: df.index = df.index.tz_localize(None)
+        
+        last_trade_date = df.index[-1].date()
+        today = datetime.date.today()
+        # 如果最後交易日不是今天，代表今天休市
+        return last_trade_date == today
+    except Exception:
+        return False
+
 @st.cache_data(ttl=1800)
 def get_comprehensive_market_status():
     status_info = {
@@ -284,6 +300,10 @@ with st.sidebar:
 
 st.title("📈 短線成長股・量縮深蹲指示器 V2.7 (攻守平衡旗艦版)")
 
+is_trading_today = check_is_trading_day()
+if not is_trading_today:
+    st.info("⏸ **【台股休市提醒】今日為國定假日或週末，大盤未開市，戰報與持股天數暫停推進。**")
+
 mkt_env = get_comprehensive_market_status()
 if mkt_env["env_level"] == "GREEN":
     st.success(f"**{mkt_env['env_title']}** ｜ 加權：{mkt_env['twii_c']:,.0f} (月線 {mkt_env['twii_ma']:,.0f}) ｜ 櫃買：{mkt_env['otc_c']:,.1f} (月線 {mkt_env['otc_ma']:,.1f})\n\n{mkt_env['env_desc']}")
@@ -310,30 +330,33 @@ with tab_radar:
         btn_manual_scan = st.button("⚡ 手動立即掃描雷達", type="primary", use_container_width=True)
 
     if btn_manual_scan:
-        with st.spinner("🚀 正在檢驗昨日突破建倉，並以 V2.7 參數連線證交所產出今日雷達戰報... (約需 15~20 秒)"):
-            try:
-                import tracker
-                import screener
-                importlib.reload(tracker)
-                importlib.reload(screener)
+        if not is_trading_today:
+            st.warning("⚠️ **今日台股休市，沒有新的交易數據可供掃描！**")
+        else:
+            with st.spinner("🚀 正在檢驗昨日突破建倉，並以 V2.7 參數連線證交所產出今日雷達戰報... (約需 15~20 秒)"):
+                try:
+                    import tracker
+                    import screener
+                    importlib.reload(tracker)
+                    importlib.reload(screener)
 
-                tracker.run_tracker()
-                screener.run_screener()
+                    tracker.run_tracker()
+                    screener.run_screener()
 
-                new_rep = load_json(REPORT_FILE, {})
-                if new_rep: save_json(REPORT_FILE, new_rep)
+                    new_rep = load_json(REPORT_FILE, {})
+                    if new_rep: save_json(REPORT_FILE, new_rep)
 
-                new_pos = load_json(POSITIONS_FILE, [])
-                if new_pos: save_json(POSITIONS_FILE, new_pos)
+                    new_pos = load_json(POSITIONS_FILE, [])
+                    if new_pos: save_json(POSITIONS_FILE, new_pos)
 
-                if os.path.exists(HISTORY_FILE):
-                    with open(HISTORY_FILE, "rb") as f:
-                        push_file_to_github(HISTORY_FILE, f.read())
+                    if os.path.exists(HISTORY_FILE):
+                        with open(HISTORY_FILE, "rb") as f:
+                            push_file_to_github(HISTORY_FILE, f.read())
 
-                st.success("✅ 昨日突破建倉結算與今日 V2.7 雷達掃描已完成，已同步至 GitHub！")
-                st.rerun()
-            except Exception as e:
-                st.error(f"❌ 手動掃描異常: {e}")
+                    st.success("✅ 昨日突破建倉結算與今日 V2.7 雷達掃描已完成，已同步至 GitHub！")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ 手動掃描異常: {e}")
 
     st.write("---")
     report = load_json(REPORT_FILE, {})
@@ -543,10 +566,10 @@ with tab_tracker:
                 st.success(f"✅ 成功將 {s_name} ({clean_c}) 加入方案 B！股數：{tot_shares:,d} 股，本金：NT$ {int(cost):,d}")
                 st.rerun()
 
-    # 2. 校正在倉持股資訊
-    with st.expander("✏️ 校正在倉部位資訊（修正進場日期、成本、股數或總本金）", expanded=False):
+    # 2. 校正在倉持股資訊 (加入手動校正天數)
+    with st.expander("✏️ 校正在倉部位資訊（修正進場日期、成本、股數、總本金或天數）", expanded=False):
         if positions:
-            st.info("若系統自動開倉的 20 萬與真實券商扣款金額有落差，可在此直接校正為精確數字！")
+            st.info("若系統自動開倉的數值與實際有落差，可在此直接校正為精確數字！")
             c_edit1, c_edit2, c_edit3 = st.columns(3)
             with c_edit1:
                 edit_target = st.selectbox("選擇要校正的在倉股票", options=[f"{p['name']} ({p['code']})" for p in positions], key="sel_edit_pos")
@@ -558,13 +581,16 @@ with tab_tracker:
                 default_ep = float(edit_pos['entry_price']) if edit_pos else 100.0
                 new_entry_price = st.number_input("修正買進均價 (NTD)", value=default_ep, step=0.1, key="in_edit_price")
 
-            c_edit4, c_edit5 = st.columns(2)
+            c_edit4, c_edit5, c_edit6 = st.columns(3)
             with c_edit4:
                 curr_tot_shares = int(edit_pos['shares_a'] + edit_pos['shares_b']) if edit_pos else 1000
                 new_shares = st.number_input("修正買進總股數 (股)", value=curr_tot_shares, step=100, key="in_edit_shares")
             with c_edit5:
                 curr_tot_cost = int(edit_pos.get('total_invested', 200000)) if edit_pos else 200000
                 new_cost = st.number_input("修正實際投入總金額 (NTD，含手續費)", value=curr_tot_cost, step=1000, key="in_edit_cost")
+            with c_edit6:
+                curr_days = int(edit_pos.get('days_held', 0)) if edit_pos else 0
+                new_days = st.number_input("修正已持有交易日天數 (天)", min_value=0, max_value=20, value=curr_days, step=1, key="in_edit_days")
                 
             if st.button("確認儲存校正數值", key="btn_save_edit", type="primary", use_container_width=True):
                 if edit_pos:
@@ -573,10 +599,11 @@ with tab_tracker:
                     edit_pos['shares_a'] = int(new_shares) // 2
                     edit_pos['shares_b'] = int(new_shares) - edit_pos['shares_a']
                     edit_pos['total_invested'] = float(new_cost)
+                    edit_pos['days_held'] = int(new_days)
                     edit_pos['curr_stop'] = round(float(new_entry_price) * 0.96, 1)
                     edit_pos['tp_stage1'] = round(float(new_entry_price) * 1.08, 1)
                     save_json(POSITIONS_FILE, positions)
-                    st.success(f"✅ 已成功將 {edit_target} 校正！總股數：{int(new_shares):,d} 股，實際本金：NT$ {int(new_cost):,d}！")
+                    st.success(f"✅ 已成功將 {edit_target} 校正！天數更新為 {int(new_days)} 天，實際本金：NT$ {int(new_cost):,d}！")
                     st.rerun()
 
     # 3. 手動平倉與部分減倉
@@ -1252,7 +1279,7 @@ with tab_watchlist:
                     cond_support = touch_10 or touch_20
                     cond_vol = (vol < vol_ma5)
                     cond_k = (abs(c_today - open_p) / open_p <= 0.035)
-                    # 💡 V2.7 RSI 蓄勢門檻 40 ~ 70
+                    # 💡 V2.7 升級：RSI 蓄勢上限放寬至 70
                     cond_rsi_hard = (40.0 <= rsi_val <= rsi_upper_limit)
 
                     is_squat = cond_trend and cond_support and cond_vol and cond_k and cond_rsi_hard
