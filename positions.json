@@ -8,7 +8,7 @@
     "total_invested": 255363.0,
     "shares_a": 1000,
     "shares_b": 1000,
-    "days_held": 1,
+    "days_held": 3,
     "is_breakeven": false,
     "lot_a_sold": false,
     "lot_a_revenue": 0.0,
@@ -17,7 +17,7 @@
     "unrealized_pct": 0.39,
     "curr_stop": 122.4,
     "tp_stage1": 137.7,
-    "ma10": 125.5,
+    "ma10": 126.7,
     "is_extended": false
   },
   {
@@ -34,12 +34,12 @@
     "lot_a_sold": false,
     "lot_a_revenue": 0.0,
     "lot_a_pnl_pct": 0.0,
-    "curr_price": 1045.0,
-    "unrealized_pct": 0.0,
+    "curr_price": 1050.0,
+    "unrealized_pct": 0.48,
     "curr_stop": 1003.2,
     "tp_stage1": 1128.6,
-    "ma10": 1034.5,
-    "is_extended": false
+    "ma10": 1052.0,
+    "is_extended": true
   },
   {
     "code": "2034",
@@ -55,11 +55,11 @@
     "lot_a_sold": false,
     "lot_a_revenue": 0.0,
     "lot_a_pnl_pct": 0.0,
-    "curr_price": 23.85,
-    "unrealized_pct": 0.0,
+    "curr_price": 23.7,
+    "unrealized_pct": -0.63,
     "curr_stop": 22.9,
     "tp_stage1": 25.8,
-    "ma10": 23.6,
+    "ma10": 23.9,
     "is_extended": false
   }
 ]
