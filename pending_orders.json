@@ -1,1 +1,18 @@
-[]
+[
+  {
+    "code": "4958",
+    "name": "臻鼎-KY",
+    "ticker": "4958.TW",
+    "right_trigger": 568.0,
+    "scan_date": "2026-10-14",
+    "grade_badge": "🎯 強勢動能 (A級)"
+  },
+  {
+    "code": "6257",
+    "name": "矽格",
+    "ticker": "6257.TW",
+    "right_trigger": 287.0,
+    "scan_date": "2026-10-14",
+    "grade_badge": "🎯 強勢動能 (A級)"
+  }
+]
