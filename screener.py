@@ -23,13 +23,6 @@ TW_INDUSTRY_MAP = {
     "37": "運動休閒", "38": "居家生活"
 }
 
-# V2.8 剔除牛皮傳產類股黑名單
-TRADITIONAL_BLACKLIST_NAMES = {
-    "水泥工業", "食品工業", "塑膠工業", "紡織纖維", "玻璃陶瓷",
-    "造紙工業", "鋼鐵工業", "橡膠工業", "汽車工業", "建材營造",
-    "航運業", "觀光餐旅", "金融保險業", "貿易百貨業", "綜合", "其他業", "油電燃氣業"
-}
-
 def translate_industry(ind_raw):
     raw_str = str(ind_raw).strip()
     if raw_str in TW_INDUSTRY_MAP:
@@ -106,8 +99,8 @@ def get_revenue_map():
 
 def get_trust_buy_7d_map():
     """
-    💡【核心升級】：往回抓取最近 7 個有效交易日的證交所 (T86) 與櫃買中心三大法人報表，
-    精確計算每一檔股票的「最新單日投信買超 (trust_1d)」與「近 7 日累積投信買超 (trust_7d)」！
+    往回抓取最近 7 個有效交易日的證交所 (T86) 與櫃買中心三大法人報表，
+    精確計算每一檔股票的「最新單日投信買超 (trust_1d)」與「近 7 日累積投信買超 (trust_7d)」
     """
     trust_1d = {}
     trust_7d = {}
@@ -181,7 +174,7 @@ def get_trust_buy_7d_map():
     return trust_1d, trust_7d
 
 def run_screener():
-    print("📡 [Screener V2.8] 啟動全自動獵股漏斗 (含投信 7 日累積鎖碼 + 剔除傳產 + 股本<=90億)...")
+    print("📡 [Screener V2.8] 啟動全自動獵股漏斗 (3 -> 1 -> 2 全產業順勢篩選)...")
     profiles = get_company_profiles()
     rev_map = get_revenue_map()
     trust_1d_map, trust_7d_map = get_trust_buy_7d_map()
@@ -194,16 +187,8 @@ def run_screener():
         if not p:
             continue
 
-        # 💡 V2.8 修正 1：剔除鋼鐵等牛皮傳產類股
-        if p["industry"] in TRADITIONAL_BLACKLIST_NAMES or code.startswith("20"):
-            continue
-
-        # 💡 V2.8 修正 2：股本規模收斂至 20億 ~ 90億 (排除大型牛皮股)
+        # 💡 步驟 3：投信 7 日累積鎖碼過濾 (先用法人買盤淘汰全市場無資金照顧之標的)
         cap = p["cap"]
-        if not (20.0 <= cap <= 90.0):
-            continue
-
-        # 💡 核心補齊：檢驗投信 7 日累積買超 (中型股>=100張, 大型股>=250張) 且最新日無大倒貨(>=0張)
         lots_7d = trust_7d_map.get(code, 0)
         lots_1d = trust_1d_map.get(code, 0)
         min_7d_req = 100 if cap <= 60.0 else 250
@@ -213,7 +198,11 @@ def run_screener():
         if lots_1d < 0:
             continue
 
-        # 步驟 2：月營收 YoY > 20%
+        # 💡 步驟 1：股本規模過濾 (20億 ~ 90億，不限產業，全面捕捉資金輪動)
+        if not (20.0 <= cap <= 90.0):
+            continue
+
+        # 💡 步驟 2：月營收 YoY > 20% (實質業績成長保護)
         yoy = rev_map.get(code, None)
         if yoy is None or yoy <= 20.0:
             continue
@@ -224,13 +213,13 @@ def run_screener():
             "ticker": f"{code}{p['market']}",
             "cap": cap,
             "industry": p["industry"],
-            "trust_buy": lots_1d,      # 相容舊欄位：單日買超
+            "trust_buy": lots_1d,      # 相容欄位：最新單日投信買超
             "trust_1d": lots_1d,       # 最新單日投信買超
             "trust_7d": lots_7d,       # 近 7 日累積投信買超 (核心排序依據)
             "rev_yoy": yoy
         })
 
-    print(f"🔎 通過基本面與 7 日投信籌碼漏斗共 {len(funnel_candidates)} 檔，開始進行量縮深蹲檢驗...")
+    print(f"🔎 通過 3 -> 1 -> 2 漏斗共 {len(funnel_candidates)} 檔，開始進行量縮深蹲檢驗...")
 
     results = []
     squat_count = 0
@@ -340,7 +329,7 @@ def run_screener():
         except Exception:
             pass
 
-    # 💡 嚴格依照回測邏輯排序：1.符合深蹲 -> 2.投信7日累積買超張數(由大到小) -> 3.星級評等
+    # 嚴格依照回測邏輯排序：1.符合深蹲 -> 2.投信7日累積買超張數(由大到小) -> 3.星級評等
     results.sort(key=lambda x: (x.get("is_squat", False), x.get("trust_7d", 0), x.get("grade_rank", 1)), reverse=True)
 
     report_data = {
