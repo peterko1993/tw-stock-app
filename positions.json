@@ -1,26 +1,5 @@
 [
   {
-    "code": "3189",
-    "name": "景碩",
-    "ticker": "3189.TW",
-    "entry_date": "2026-10-14",
-    "entry_price": 1045.0,
-    "total_invested": 198832.0,
-    "shares_a": 95,
-    "shares_b": 95,
-    "days_held": 0,
-    "is_breakeven": false,
-    "lot_a_sold": false,
-    "lot_a_revenue": 0.0,
-    "lot_a_pnl_pct": 0.0,
-    "curr_price": 1050.0,
-    "unrealized_pct": 0.48,
-    "curr_stop": 1003.2,
-    "tp_stage1": 1128.6,
-    "ma10": 1052.0,
-    "is_extended": true
-  },
-  {
     "code": "2034",
     "name": "允強",
     "ticker": "2034.TW",
