@@ -23,6 +23,13 @@ TW_INDUSTRY_MAP = {
     "37": "運動休閒", "38": "居家生活"
 }
 
+# 💡 V2.8 剔除牛皮傳產類股黑名單 (水泥、食品、塑膠、紡織、玻璃、造紙、鋼鐵、橡膠、汽車、營建、航運、觀光、金融、百貨等)
+EXCLUDED_INDUSTRIES = {
+    "水泥工業", "食品工業", "塑膠工業", "紡織纖維", "玻璃陶瓷",
+    "造紙工業", "鋼鐵工業", "橡膠工業", "汽車工業", "建材營造",
+    "航運業", "觀光餐旅", "金融保險業", "貿易百貨業", "油電燃氣業", "綜合"
+}
+
 def translate_industry(ind_raw):
     raw_str = str(ind_raw).strip()
     if raw_str in TW_INDUSTRY_MAP:
@@ -97,13 +104,20 @@ def get_revenue_map():
             pass
     return rev_map
 
-def get_trust_buy_map():
-    trust_map = {}
+# 💡【核心修復】：真正抓取過去 7 個交易日投信買賣超，計算「單日買超 (1d)」與「7日累計買超 (7d)」
+def get_trust_buy_stats():
+    trust_1d = {}
+    trust_7d = {}
     headers = {"User-Agent": "Mozilla/5.0"}
-    # 嘗試往回找最近 5 個日曆天內有效的證交所 T86 與櫃買三大法人日報
-    for offset in range(0, 6):
+
+    # 1. 上市 (TWSE T86)：往回掃描最近 14 個日曆天，收集最多 7 個有效開盤日
+    twse_days_found = 0
+    for offset in range(0, 14):
+        if twse_days_found >= 7:
+            break
         dt = datetime.date.today() - datetime.timedelta(days=offset)
-        if dt.weekday() >= 5: continue
+        if dt.weekday() >= 5:
+            continue
         d_twse = dt.strftime("%Y%m%d")
         try:
             url_twse = f"https://www.twse.com.tw/rwd/zh/fund/T86?date={d_twse}&selectType=ALLBUT0999&response=json"
@@ -114,16 +128,26 @@ def get_trust_buy_map():
                     for row in j["data"]:
                         code = str(row[0]).strip()
                         if len(code) == 4 and code.isdigit():
-                            # 投信買賣超股數在欄位 index 10
-                            net_shares = int(str(row[10]).replace(",", "").strip())
-                            trust_map[code] = net_shares // 1000
-                    break
+                            try:
+                                net_lots = int(str(row[10]).replace(",", "").strip()) // 1000
+                                if twse_days_found == 0:
+                                    trust_1d[code] = net_lots
+                                trust_7d[code] = trust_7d.get(code, 0) + net_lots
+                            except Exception:
+                                pass
+                    twse_days_found += 1
+                    time.sleep(0.25)
         except Exception:
             pass
 
-    for offset in range(0, 6):
+    # 2. 上櫃 (TPEX)：往回掃描最近 14 個日曆天，收集最多 7 個有效開盤日
+    tpex_days_found = 0
+    for offset in range(0, 14):
+        if tpex_days_found >= 7:
+            break
         dt = datetime.date.today() - datetime.timedelta(days=offset)
-        if dt.weekday() >= 5: continue
+        if dt.weekday() >= 5:
+            continue
         roc_yr = dt.year - 1911
         d_tpex = f"{roc_yr}/{dt.strftime('%m/%d')}"
         try:
@@ -137,37 +161,54 @@ def get_trust_buy_map():
                         code = str(row[0]).strip()
                         if len(code) == 4 and code.isdigit():
                             try:
-                                net_shares = int(str(row[13]).replace(",", "").strip())
-                                trust_map[code] = net_shares // 1000
+                                net_lots = int(str(row[13]).replace(",", "").strip()) // 1000
+                                if tpex_days_found == 0:
+                                    trust_1d[code] = net_lots
+                                trust_7d[code] = trust_7d.get(code, 0) + net_lots
                             except Exception:
                                 pass
-                    break
+                    tpex_days_found += 1
+                    time.sleep(0.25)
         except Exception:
             pass
 
-    return trust_map
+    return trust_1d, trust_7d
 
 def run_screener():
-    print("📡 [Screener V2.7] 啟動全自動獵股漏斗 (3 -> 1 -> 2)...")
+    print("📡 [Screener V2.8] 啟動全自動獵股漏斗 (含投信7日累計籌碼 + 剔除牛皮傳產 + 股本20~100億)...")
     profiles = get_company_profiles()
     rev_map = get_revenue_map()
-    trust_map = get_trust_buy_map()
+    trust_1d_map, trust_7d_map = get_trust_buy_stats()
 
     funnel_candidates = []
-    for code, net_lots in trust_map.items():
-        if net_lots < 50:
-            continue
+    all_codes = set(list(trust_1d_map.keys()) + list(trust_7d_map.keys()))
+
+    for code in all_codes:
+        net_1d = trust_1d_map.get(code, 0)
+        net_7d = trust_7d_map.get(code, 0)
+
         p = profiles.get(code)
         if not p:
             continue
+
         cap = p["cap"]
-        # 步驟 1 & 3：股本 20~150 億階梯門檻
-        if not (20.0 <= cap <= 150.0):
+        industry = p["industry"]
+
+        # 💡 步驟 1：V2.8 股本收斂至 20億 ~ 100億，並剔除傳產牛皮股 (如鋼鐵 20xx)
+        if not (20.0 <= cap <= 100.0):
             continue
-        if cap > 60.0 and net_lots < 250:
+        if industry in EXCLUDED_INDUSTRIES or code.startswith("20"):
             continue
 
-        # 步驟 2：月營收 YoY > 20%
+        # 💡 步驟 3：投信 7 日累計買超核心門檻 (與 Colab 回測 100% 對齊)
+        min_7d_req = 100 if cap <= 60.0 else 250
+        if net_7d < min_7d_req:
+            continue
+        # 最新一日投信不可站在大賣方 (至少小買或持平 >= 0，若單日買超 >= 20 張更佳)
+        if net_1d < 0:
+            continue
+
+        # 💡 步驟 2：月營收 YoY > 20%
         yoy = rev_map.get(code, None)
         if yoy is None or yoy <= 20.0:
             continue
@@ -177,12 +218,13 @@ def run_screener():
             "name": p["name"],
             "ticker": f"{code}{p['market']}",
             "cap": cap,
-            "industry": p["industry"],
-            "trust_buy": net_lots,
+            "industry": industry,
+            "trust_buy": net_1d,
+            "trust_7d": net_7d,
             "rev_yoy": yoy
         })
 
-    print(f"🔎 通過基本面與籌碼漏斗共 {len(funnel_candidates)} 檔，開始進行 V2.7 量縮深蹲檢驗...")
+    print(f"🔎 通過基本面與【投信7日累計籌碼】漏斗共 {len(funnel_candidates)} 檔，開始進行量縮深蹲檢驗...")
 
     results = []
     squat_count = 0
@@ -252,7 +294,6 @@ def run_screener():
             cond_support = touch_10 or touch_20
             cond_vol = (vol < vol_ma5) and (vol < vol_ma20)
             cond_k = (abs(close - open_p) / open_p) <= 0.035
-            # 💡【V2.7 核心升級】：RSI 蓄勢門檻放寬為 40.0 ~ 70.0
             cond_rsi = (40.0 <= rsi_val <= 70.0)
 
             is_squat = cond_trend and cond_support and cond_vol and cond_k and cond_rsi
@@ -263,10 +304,13 @@ def run_screener():
 
             if cond_macd_res and cond_kd_res:
                 grade_badge = "👑 頂級共振 (S級)"
+                grade_rank = 3
             elif cond_macd_res or cond_kd_res:
                 grade_badge = "🎯 強勢動能 (A級)"
+                grade_rank = 2
             else:
                 grade_badge = "🟢 標準深蹲 (B級)"
+                grade_rank = 1
 
             kd_desc = f"K={k_val:.1f} (打勾/金叉)" if cond_kd_res else f"K={k_val:.1f} (整理中)"
             macd_desc = "零軸上翻紅/收斂" if cond_macd_res else "動能整理中"
@@ -283,13 +327,15 @@ def run_screener():
                 "rsi": round(rsi_val, 1),
                 "kd_desc": kd_desc,
                 "macd_desc": macd_desc,
-                "grade_badge": grade_badge
+                "grade_badge": grade_badge,
+                "grade_rank": grade_rank
             })
             results.append(item)
-        except Exception as e:
+        except Exception:
             pass
 
-    results.sort(key=lambda x: (x.get("is_squat", False), x.get("trust_buy", 0)), reverse=True)
+    # 💡 嚴格依照：是否深蹲 -> 星級評級 (S>A>B) -> 投信7日累計買超 (trust_7d) 由大到小排序
+    results.sort(key=lambda x: (x.get("is_squat", False), x.get("grade_rank", 0), x.get("trust_7d", 0), x.get("trust_buy", 0)), reverse=True)
 
     report_data = {
         "update_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -299,7 +345,6 @@ def run_screener():
     }
     save_json(REPORT_FILE, report_data)
 
-    # 將今日符合深蹲之標的寫入 pending_orders.json 供次日追蹤突破建倉
     positions = load_json(POSITIONS_FILE, [])
     active_codes = {str(p['code']).split('.')[0].strip() for p in positions}
     pending_list = []
@@ -311,10 +356,11 @@ def run_screener():
                 "ticker": s["ticker"],
                 "right_trigger": s["right_trigger"],
                 "scan_date": today_str,
-                "grade_badge": s.get("grade_badge", "🟢 標準深蹲 (B級)")
+                "grade_badge": s.get("grade_badge", "🟢 標準深蹲 (B級)"),
+                "trust_7d": s.get("trust_7d", s.get("trust_buy", 0))
             })
     save_json(PENDING_FILE, pending_list)
-    print(f"✅ [Screener V2.7 完成] 符合深蹲共 {squat_count} 檔，已寫入戰報與待突破佇列！")
+    print(f"✅ [Screener V2.8 完成] 符合深蹲共 {squat_count} 檔，已依投信7日累計買超排序寫入戰報！")
 
 if __name__ == "__main__":
     run_screener()
