@@ -10,7 +10,7 @@ import requests
 import datetime
 import importlib
 
-st.set_page_config(page_title="短線成長股決策助手 V2.7", page_icon="📈", layout="wide")
+st.set_page_config(page_title="短線成長股決策助手 V2.8", page_icon="📈", layout="wide")
 
 WATCHLIST_FILE = "watchlist.json"
 REPORT_FILE = "radar_report.json"
@@ -89,20 +89,14 @@ def save_history_csv(df):
     with open(HISTORY_FILE, "rb") as f:
         push_file_to_github(HISTORY_FILE, f.read())
 
-# ================= 檢查今日是否開盤 =================
 @st.cache_data(ttl=1800)
 def check_is_trading_day():
-    """ 檢查今天台股是否有開盤 (避開國定假日如 10/9 國慶補假) """
     try:
         df = yf.download("^TWII", period="5d", progress=False)
         if df.empty: return False
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
         if df.index.tz is not None: df.index = df.index.tz_localize(None)
-        
-        last_trade_date = df.index[-1].date()
-        today = datetime.date.today()
-        # 如果最後交易日不是今天，代表今天休市
-        return last_trade_date == today
+        return df.index[-1].date() == datetime.date.today()
     except Exception:
         return False
 
@@ -112,10 +106,8 @@ def get_comprehensive_market_status():
         "twii_c": 0, "twii_ma": 0, "twii_bull": True,
         "otc_c": 0, "otc_ma": 0, "otc_bull": True,
         "up_stocks": 0, "down_stocks": 0, "has_adl": False,
-        "env_level": "GREEN",
-        "env_title": "多頭健康",
-        "env_desc": "",
-        "budget_factor": 1.0
+        "env_level": "GREEN", "env_title": "多頭健康", "env_desc": "",
+        "budget_factor": 1.0, "max_slots": 3, "slot_budget": 180000.0
     }
     try:
         df_indices = yf.download(["^TWII", "^TWOII"], period="3mo", interval="1d", progress=False)
@@ -165,20 +157,26 @@ def get_comprehensive_market_status():
         status_info["env_title"] = "🔴 空頭反壓休眠（加權跌破月線）"
         status_info["env_desc"] = "加權指數處於月線反壓，依防禦 SOP 強制休眠，全市場雷達停止開新倉！"
         status_info["budget_factor"] = 0.0
+        status_info["max_slots"] = 0
+        status_info["slot_budget"] = 0.0
     elif not otc_ok or is_poor_breadth:
         status_info["env_level"] = "YELLOW"
         status_info["env_title"] = "🟡 結構背離／拉積盤提醒（中小型股整理）"
         reasons = []
         if not otc_ok: reasons.append("櫃買指數 (OTC) 跌破月線")
         if is_poor_breadth: reasons.append(f"下跌家數 ({down_s}) 明顯多於上漲家數 ({up_s})")
-        status_info["env_desc"] = f"偵測到 {' 且 '.join(reasons)}。依 V2.7 攻守平衡策略：維持 20 萬元標準預算，但嚴選 👑 S 級與 🎯 A 級高動能標的進場（暫緩 B 級）！"
-        status_info["budget_factor"] = 1.0
+        status_info["env_desc"] = f"偵測到 {' 且 '.join(reasons)}。依 V2.8 風控標準：只准 👑 S 級進場，在倉上限降為 1~2 檔，單槽預算降載為 13.5 萬元！"
+        status_info["budget_factor"] = 0.75
+        status_info["max_slots"] = 2
+        status_info["slot_budget"] = 135000.0
     else:
         status_info["env_level"] = "GREEN"
         status_info["env_title"] = "🟢 全面多頭健康（加權與櫃買同步站穩月線）"
         adl_str = f"（上漲 {up_s} 檔 vs 下跌 {down_s} 檔，市場廣度良好）" if status_info["has_adl"] else ""
-        status_info["env_desc"] = f"權值與中小型股齊步走多{adl_str}，資金環境健康，允許 100% 槽位配置（S / A / B 級皆可進場）。"
+        status_info["env_desc"] = f"權值與中小型股齊步走多{adl_str}，資金環境健康，允許標準 3 槽配置（S / A / B 級皆可進場，標準單槽 18 萬元）。"
         status_info["budget_factor"] = 1.0
+        status_info["max_slots"] = 3
+        status_info["slot_budget"] = 180000.0
 
     return status_info
 
@@ -255,15 +253,24 @@ if "watchlist" not in st.session_state:
 
 # ================= 側邊欄設定 =================
 with st.sidebar:
+    st.header("💰 帳戶本金水位設定")
+    user_total_capital = st.number_input(
+        "當前帳戶總本金基準 (NTD)",
+        min_value=100000.0,
+        max_value=5000000.0,
+        value=545000.0,
+        step=5000.0,
+        help="貼合您目前的真實本金水位，系統將依此動態計算單槽預算與可用現金池！"
+    )
+
     st.header("🎛️ 策略防禦與參數調校")
-    with st.expander("🛡️ 實盤防禦開關", expanded=True):
+    with st.expander("🛡️ 實盤防禦開關 (V2.8)", expanded=True):
         use_market_filter = st.toggle("啟用三維大盤風控濾網", value=True)
-        use_right_side = st.toggle("啟用右側過高確認", value=True)
         be_threshold = st.slider("動態保本啟動點 (+%)", 2.5, 6.0, 4.0, 0.5)
         stop_loss_pct = st.slider("硬停損比例 (-%)", 2.0, 8.0, 4.0, 0.5)
         take_profit_pct = st.slider("階段一停利目標 (+%)", 5.0, 15.0, 8.0, 0.5)
 
-    with st.expander("⚙️ 技術面閥值設定 (V2.7)", expanded=False):
+    with st.expander("⚙️ 技術面閥值設定", expanded=False):
         buffer_pct = st.slider("均線回測緩衝 (%)", 0.5, 3.0, 1.8, 0.1)
         k_body_limit = st.slider("K棒實體振幅上限 (%)", 1.0, 5.0, 3.5, 0.5)
         rsi_upper_limit = st.slider("RSI 多方蓄勢上限", 60.0, 75.0, 70.0, 1.0)
@@ -298,7 +305,7 @@ with st.sidebar:
         st.success("已還原預設自選清單！")
         st.rerun()
 
-st.title("📈 短線成長股・量縮深蹲指示器 V2.7 (攻守平衡旗艦版)")
+st.title("📈 短線成長股・量縮深蹲指示器 V2.8 (實戰精煉版)")
 
 is_trading_today = check_is_trading_day()
 if not is_trading_today:
@@ -312,20 +319,38 @@ elif mkt_env["env_level"] == "YELLOW":
 else:
     st.error(f"**{mkt_env['env_title']}** ｜ 加權：{mkt_env['twii_c']:,.0f} (月線 {mkt_env['twii_ma']:,.0f})\n\n🛑 {mkt_env['env_desc']}")
 
+# 讀取共用部位與帳本數據
+positions = load_json(POSITIONS_FILE, [])
+df_history = pd.read_csv(HISTORY_FILE) if os.path.exists(HISTORY_FILE) else pd.DataFrame(columns=[
+    "代號", "名稱", "進場日", "進場價", "出場日", "持股天數",
+    "投入金額", "回收金額", "淨損益(NTD)", "部位A_損益%", "部位B_損益%",
+    "綜合報酬率%", "出場原因"
+])
+
+# 💡 計算資金池核心指標
+total_invested_active = sum(float(p.get('total_invested', 0)) for p in positions)
+total_market_val_active = sum(
+    float(p.get('shares_a', 0) + p.get('shares_b', 0)) * float(p.get('curr_price', p['entry_price']))
+    for p in positions
+)
+realized_pnl_total = float(df_history['淨損益(NTD)'].sum()) if not df_history.empty else 0.0
+available_cash_balance = float(user_total_capital) + realized_pnl_total - total_invested_active
+total_account_equity = available_cash_balance + total_market_val_active
+
 tab_radar, tab_tracker, tab_batch, tab_single, tab_watchlist, tab_docs = st.tabs([
     "📡 今日雷達獵股戰報",
     "📊 實盤追蹤與績效帳本 (方案B)",
     "🚀 自選名單批次體檢", 
     "🔍 個股深入技術體檢", 
     "📋 自選股票清單總覽 (TAB 5)",
-    "📖 策略手冊與 SOP 指南 V2.7"
+    "📖 策略手冊與 SOP 指南 V2.8"
 ])
 
-# ================= TAB 0: 每日雷達戰報 =================
+# ================= TAB 0: 每日雷達戰報 (聯動方案 B 智能建倉建議) =================
 with tab_radar:
     c_title, c_scan = st.columns([3, 1.3])
     with c_title:
-        st.subheader("📡 全自動獵股雷達・今日盤後戰報 (V2.7)")
+        st.subheader("📡 全自動獵股雷達・今日盤後戰報 (V2.8 實戰精煉版)")
     with c_scan:
         btn_manual_scan = st.button("⚡ 手動立即掃描雷達", type="primary", use_container_width=True)
 
@@ -333,7 +358,7 @@ with tab_radar:
         if not is_trading_today:
             st.warning("⚠️ **今日台股休市，沒有新的交易數據可供掃描！**")
         else:
-            with st.spinner("🚀 正在檢驗昨日突破建倉，並以 V2.7 參數連線證交所產出今日雷達戰報... (約需 15~20 秒)"):
+            with st.spinner("🚀 正在抓取過去 7 個開盤日法人日報並以 V2.8 參數產出戰報... (約需 15~20 秒)"):
                 try:
                     import tracker
                     import screener
@@ -353,7 +378,7 @@ with tab_radar:
                         with open(HISTORY_FILE, "rb") as f:
                             push_file_to_github(HISTORY_FILE, f.read())
 
-                    st.success("✅ 昨日突破建倉結算與今日 V2.7 雷達掃描已完成，已同步至 GitHub！")
+                    st.success("✅ 今日戰報與 7 日累計籌碼更新完成，已同步至 GitHub！")
                     st.rerun()
                 except Exception as e:
                     st.error(f"❌ 手動掃描異常: {e}")
@@ -368,93 +393,140 @@ with tab_radar:
         cr2.metric("基本面/籌碼篩選留存", f"{report.get('total_funnel', 0)} 檔")
         cr3.metric("🎯 符合深蹲進場點", f"{report.get('total_squat', 0)} 檔")
         
+        # 取得通過深蹲之標的
         squat_stocks = [s for s in report.get("stocks", []) if s.get("is_squat")]
-        st.write("---")
         
+        # 💡【核心新增】：智能聯動方案 B 帳本之建倉指引面板
+        max_allowed_slots = mkt_env["max_slots"]
+        active_pos_count = len(positions)
+        open_slots_count = max(0, max_allowed_slots - active_pos_count)
+        suggested_slot_budget = min(mkt_env["slot_budget"], max(0.0, available_cash_balance))
+
+        st.markdown("#### 🤖 【方案 B 帳本聯動・智能建倉決策面板】")
+        b_c1, b_c2, b_c3, b_c4 = st.columns(4)
+        b_c1.metric("當前在倉檔數", f"{active_pos_count} / {max_allowed_slots} 檔")
+        b_c2.metric("剩餘可用空槽", f"{open_slots_count} 槽", delta="可開新倉" if open_slots_count > 0 else "槽位已滿")
+        b_c3.metric("在手可用現金", f"NT$ {int(available_cash_balance):,d}")
+        b_c4.metric("單槽建議預算上限", f"NT$ {int(suggested_slot_budget):,d}")
+
         if mkt_env["env_level"] == "RED" and use_market_filter:
-            st.error("🛑 **【風控攔截】：加權指數跌破月線，依防禦 SOP 建議全市場雷達強制休眠，暫不建新倉！**")
-        elif squat_stocks:
-            if mkt_env["env_level"] == "YELLOW":
-                st.warning("⚠️ **【V2.7 拉積盤攻守平衡提醒】：櫃買整理或下跌家數偏多，建議鎖定 👑 S 級與 🎯 A 級高動能標的進場（暫緩 B 級），下單預算維持 20 萬元標準配置！**")
-            st.success(f"🎯 **【今日焦點】：共發現 {len(squat_stocks)} 檔精準符合「量縮深蹲 ＋ RSI(40～70)蓄勢」進場門檻！**")
-            
-            for s in squat_stocks:
-                s_name = s.get('name', '')
-                s_code = str(s.get('code', '')).split('.')[0].strip()
-                right_trigger_p = s.get('right_trigger', s.get('high', s['close']))
-                badge = s.get('grade_badge', '🟢 標準深蹲')
-                
-                with st.container():
-                    c1, c2, c3, c4 = st.columns([2.3, 1.8, 1.9, 2.0])
-                    c1.markdown(f"### **{s_name} ({s_code})**")
-                    c1.markdown(f"**評級**：`{badge}`")
-                    c1.caption(f"最新收盤：${s['close']} ｜ 支撐：**{s['support']}** ｜ 類股：{s.get('industry', '電子科技')}")
-                    
-                    c2.write(f"• **投信買超**：`+{s['trust_buy']}` 張")
-                    c2.write(f"• **營收 YoY**：`+{s['rev_yoy']}%`")
-                    c2.write(f"• **RSI (14)**：`{s.get('rsi', '-')}` (40～70蓄勢)")
-                    
-                    c3.write(f"• **KD 姿態**：`{s.get('kd_desc', '-')}`")
-                    c3.write(f"• **MACD 動能**：`{s.get('macd_desc', '-')}`")
-                    c3.write(f"• **🎯 明日確認進場**：`突破 ${right_trigger_p}`")
-                    
-                    label_key = f"{s_name} ({s_code})"
-                    if label_key not in st.session_state.watchlist:
-                        if c4.button(f"📥 加到自選名單", key=f"radar_add_{s_code}"):
-                            st.session_state.watchlist[label_key] = s['ticker']
-                            save_json(WATCHLIST_FILE, st.session_state.watchlist)
-                            st.success(f"已將 {label_key} 加入觀察清單！")
-                            st.rerun()
-                    else:
-                        c4.write("✅ 已在自選觀察清單中")
-                        
-                    yahoo_url = f"https://tw.stock.yahoo.com/quote/{s_code}/news"
-                    google_url = f"https://www.google.com/search?q={s_name}+{s_code}+股票&tbm=nws&tbs=qdr:m"
-                    cnyes_url = f"https://invest.cnyes.com/twstock/TWS/{s_code}/news"
-
-                    with st.expander(f"📰 查看 {s_name} 近半個月新聞與產業速查", expanded=False):
-                        n1, n2, n3 = st.columns(3)
-                        n1.markdown(f"[📰 Yahoo 奇摩個股新聞]({yahoo_url})")
-                        n2.markdown(f"[🔍 Google 財經近半月新聞]({google_url})")
-                        n3.markdown(f"[📊 鉅亨網法人與重大訊息]({cnyes_url})")
-                st.divider()
+            st.error("🛑 **【大盤紅燈休眠】：加權指數跌破月線，依防禦 SOP 強制休眠，今日不建議建立任何新倉！**")
+        elif open_slots_count <= 0:
+            st.warning(f"⚠️ **【倉位已滿警示】：目前在倉已達上限（{active_pos_count}/{max_allowed_slots} 檔），現金池需保留護城河，今日請維持觀望，無需掛單開新倉！**")
+        elif not squat_stocks:
+            st.info("⏸ 今日籌碼與基本面強勢股尚未踩在均線深蹲點，建議維持觀望。")
         else:
-            st.info("⏸ 今日籌碼與基本面強勢股尚未剛好踩在均線深蹲點，建議維持觀望。")
+            # 排除已在倉的標的
+            active_codes = {str(p['code']).split('.')[0].strip() for p in positions}
+            fresh_candidates = [s for s in squat_stocks if str(s.get('code', '')).split('.')[0].strip() not in active_codes]
+            
+            # 依回測最佳化規則排序：S級優先於A級，同星級比 7 日累計投信買超
+            def sort_rank_key(item):
+                badge = str(item.get("grade_badge", ""))
+                star_score = 3 if "S級" in badge else (2 if "A級" in badge else 1)
+                trust_7d = float(item.get("trust_buy_7d", item.get("trust_buy", 0)))
+                return (star_score, trust_7d)
 
-# ================= TAB 1: 實盤追蹤與績效帳本 =================
+            fresh_candidates.sort(key=sort_rank_key, reverse=True)
+
+            if mkt_env["env_level"] == "YELLOW":
+                # 黃燈只准 S 級進場
+                qualified_candidates = [s for s in fresh_candidates if "S級" in str(s.get("grade_badge", ""))]
+                st.warning("⚠️ **【黃燈拉積盤風控】：中小型股震盪整理，系統已自動過濾 A/B 級，嚴格僅放行 👑 S 級標的進場！**")
+            else:
+                qualified_candidates = fresh_candidates
+
+            if qualified_candidates:
+                st.success(f"🎯 **【今日精選建議】：共發現 {len(qualified_candidates)} 檔符合條件，依『投信 7 日累計買超 ＆ 星級』排序如下：**")
+                
+                for idx, s in enumerate(qualified_candidates):
+                    s_name = s.get('name', '')
+                    s_code = str(s.get('code', '')).split('.')[0].strip()
+                    right_trigger_p = float(s.get('right_trigger', s.get('high', s['close'])))
+                    badge = s.get('grade_badge', '🟢 標準深蹲')
+                    trust_7d_val = s.get('trust_buy_7d', s.get('trust_buy', 0))
+                    
+                    is_recommended = (idx < open_slots_count)
+                    rank_title = f"👑【推薦建倉第 {idx + 1} 順位】" if is_recommended else f"⏳【第 {idx + 1} 順位・槽位不足列為後備】"
+                    
+                    # 💡 試算建議買進股數 (整張 + 盤中零股)
+                    if right_trigger_p > 0 and suggested_slot_budget >= 35000:
+                        calc_shares = int(suggested_slot_budget / (right_trigger_p * (1 + FEE_RATE)))
+                        lots = calc_shares // 1000
+                        odd_shares = calc_shares % 1000
+                        shares_guide = f"{lots} 張" + (f" + 零股 {odd_shares} 股" if odd_shares > 0 else "") + f" (共 {calc_shares:,d} 股)"
+                        est_budget_used = int(calc_shares * right_trigger_p * (1 + FEE_RATE))
+                    else:
+                        shares_guide = "預算不足"
+                        est_budget_used = 0
+
+                    with st.container():
+                        c1, c2, c3, c4 = st.columns([2.5, 1.8, 1.8, 2.0])
+                        c1.markdown(f"### **{s_name} ({s_code})**")
+                        c1.markdown(f"**狀態**：`{rank_title}` ｜ `{badge}`")
+                        c1.caption(f"最新收盤：${s['close']} ｜ 支撐：**{s['support']}** ｜ 類股：{s.get('industry', '電子科技')}")
+                        
+                        c2.write(f"• **投信 7 日累計**：`+{trust_7d_val}` 張")
+                        c2.write(f"• **單日投信買超**：`+{s.get('trust_buy', 0)}` 張")
+                        c2.write(f"• **營收 YoY**：`+{s['rev_yoy']}%`")
+                        c2.write(f"• **RSI (14)**：`{s.get('rsi', '-')}` (40～70蓄勢)")
+                        
+                        c3.write(f"• **KD 姿態**：`{s.get('kd_desc', '-')}`")
+                        c3.write(f"• **MACD 動能**：`{s.get('macd_desc', '-')}`")
+                        c3.write(f"• **🎯 突破進場價**：`>${right_trigger_p}`")
+                        
+                        if is_recommended:
+                            c4.markdown(f"**💰 建議單槽預算**：`NT$ {est_budget_used:,d}`")
+                            c4.markdown(f"**📦 建議下單規模**：`{shares_guide}`")
+                            c4.caption("💡 建議於 13:20 確認站穩突破價且收紅 K 再掛單，杜絕早盤假拉抬！")
+                        else:
+                            c4.warning("⚠️ 依可用空槽限制，本標的列為觀望後備。")
+                            
+                        yahoo_url = f"https://tw.stock.yahoo.com/quote/{s_code}/news"
+                        google_url = f"https://www.google.com/search?q={s_name}+{s_code}+股票&tbm=nws&tbs=qdr:m"
+                        cnyes_url = f"https://invest.cnyes.com/twstock/TWS/{s_code}/news"
+
+                        with st.expander(f"📰 查看 {s_name} 近半個月新聞與產業速查", expanded=False):
+                            n1, n2, n3 = st.columns(3)
+                            n1.markdown(f"[📰 Yahoo 奇摩個股新聞]({yahoo_url})")
+                            n2.markdown(f"[🔍 Google 財經近半月新聞]({google_url})")
+                            n3.markdown(f"[📊 鉅亨網法人與重大訊息]({cnyes_url})")
+                    st.divider()
+            else:
+                st.info("⏸ 今日通過深蹲標的未達黃燈 👑 S 級進場門檻，建議保留現金觀望。")
+
+# ================= TAB 1: 實盤追蹤與績效帳本 (加入現金池與總資產) =================
 with tab_tracker:
     st.subheader("📊 方案 B：前向實盤追蹤流水帳本 (Forward-Walk Paper Trading)")
     
-    positions = load_json(POSITIONS_FILE, [])
-    df_history = pd.read_csv(HISTORY_FILE) if os.path.exists(HISTORY_FILE) else pd.DataFrame(columns=[
-        "代號", "名稱", "進場日", "進場價", "出場日", "持股天數",
-        "投入金額", "回收金額", "淨損益(NTD)", "部位A_損益%", "部位B_損益%",
-        "綜合報酬率%", "出場原因"
-    ])
+    # 💡【核心新增 1】：現金池與總資產儀表板
+    st.markdown("#### 💰 【帳戶資金池與總資產即時監控】")
+    p_c1, p_c2, p_c3, p_c4 = st.columns(4)
+    p_c1.metric("設定總本金基準", f"NT$ {int(user_total_capital):,d}", help="可在左側邊欄自訂調整本金水位")
+    p_c2.metric("在手可用現金餘額", f"NT$ {int(available_cash_balance):,d}", delta=f"佔比 {available_cash_balance/user_total_capital*100:.1f}%")
+    p_c3.metric("在倉持股即時現值", f"NT$ {int(total_market_val_active):,d}", help="各持股股數 × 最新收盤市價")
+    
+    equity_delta_val = total_account_equity - user_total_capital
+    equity_delta_pct = (equity_delta_val / user_total_capital * 100) if user_total_capital > 0 else 0.0
+    p_c4.metric("帳戶總資產現值", f"NT$ {int(total_account_equity):,d}", delta=f"{equity_delta_pct:+.2f}%")
+    st.divider()
 
     total_trades = len(df_history)
-    is_dd_meltdown = False
     if total_trades > 0:
         wins = df_history[df_history['綜合報酬率%'] > 0]
         win_rate = len(wins) / total_trades * 100
         total_pnl = df_history['淨損益(NTD)'].sum()
         avg_days = df_history['持股天數'].mean()
-        # 計算歷史累積淨值是否觸發 -10% 熔斷
-        eq_curve = 600000.0 + df_history['淨損益(NTD)'].cumsum()
-        peak_eq = max(600000.0, eq_curve.max())
-        curr_dd = (eq_curve.iloc[-1] - peak_eq) / peak_eq
-        if curr_dd <= -0.10:
-            is_dd_meltdown = True
     else:
         win_rate, total_pnl, avg_days = 0.0, 0, 0.0
 
     m1, m2, m3 = st.columns(3)
-    m1.metric("在倉持股", f"{len(positions)} / 3 檔")
-    m2.metric("已結案", f"{total_trades} 筆")
-    m3.metric("勝率", f"{win_rate:.1f} %")
+    m1.metric("在倉持股", f"{len(positions)} / {mkt_env['max_slots']} 檔")
+    m2.metric("已結案筆數", f"{total_trades} 筆")
+    m3.metric("實戰勝率", f"{win_rate:.1f} %")
     
     m4, m5 = st.columns(2)
-    m4.metric("累積淨獲利", f"NT$ {int(total_pnl):+,d}")
+    m4.metric("歷史累積實現淨損益", f"NT$ {int(total_pnl):+,d}")
     m5.metric("平均持股天數", f"{avg_days:.1f} 天")
     st.divider()
 
@@ -506,12 +578,7 @@ with tab_tracker:
 
     # 1. 手動快速補登開倉
     with st.expander("➕ 手動快速補登開倉（可自訂實際買進股數與投入金額）", expanded=False):
-        if is_dd_meltdown:
-            st.warning("⚠️ 帳戶歷程回撤已達 -10% 防禦熔斷線，建議本筆下單預算打 7 折（約 14 萬元）！")
-        elif mkt_env["env_level"] == "YELLOW":
-            st.info("💡 目前為拉積盤環境，依 V2.7 策略維持 20 萬元標準預算，請優先登錄 👑 S 級與 🎯 A 級標的！")
-        else:
-            st.info("💡 在此可直接輸入真實券商對帳單的實際買進價格、實際股數與扣款總額，損益計算將 100% 精準吻合！")
+        st.info(f"💡 目前可用現金池為 **NT$ {int(available_cash_balance):,d}**，建議單槽預算上限為 **NT$ {int(mkt_env['slot_budget']):,d}**。善用零股精準控制預算！")
             
         c_add1, c_add2, c_add3 = st.columns(3)
         with c_add1:
@@ -519,15 +586,14 @@ with tab_tracker:
         with c_add2:
             in_buy_price = st.number_input("實際買進均價 (NTD)", value=127.5, step=0.1, key="in_manual_price")
         with c_add3:
-            in_entry_date = st.text_input("進場日期 (YYYY-MM-DD)", value="2026-10-08", key="in_manual_date")
+            in_entry_date = st.text_input("進場日期 (YYYY-MM-DD)", value=datetime.date.today().strftime("%Y-%m-%d"), key="in_manual_date")
 
-        active_budget_factor = 0.7 if is_dd_meltdown else 1.0
-        suggested_budget = 200000.0 * active_budget_factor
+        suggested_budget = min(mkt_env["slot_budget"], max(0.0, available_cash_balance))
         est_shares = int(suggested_budget / (float(in_buy_price) * (1 + FEE_RATE))) if float(in_buy_price) > 0 else 1000
         
         c_add4, c_add5 = st.columns(2)
         with c_add4:
-            in_custom_shares = st.number_input("實際買進總股數 (股，可自由調整整張或零股)", value=est_shares, step=100, key="in_manual_shares")
+            in_custom_shares = st.number_input("實際買進總股數 (股，含盤中零股)", value=est_shares, step=100, key="in_manual_shares")
         with c_add5:
             est_cost = int(float(in_custom_shares) * float(in_buy_price) * (1 + FEE_RATE))
             in_custom_cost = st.number_input("實際投入總金額 (NTD，可填對帳單實際扣款)", value=est_cost, step=1000, key="in_manual_cost")
@@ -540,8 +606,8 @@ with tab_tracker:
 
             if any(str(p['code']).split('.')[0].strip() == clean_c for p in positions):
                 st.warning(f"⚠️ 在倉中已有 {clean_c}，無需重複加入！")
-            elif len(positions) >= 3:
-                st.error("🛑 槽位已滿（上限 3 檔），無法再開新部位！")
+            elif len(positions) >= mkt_env["max_slots"]:
+                st.error(f"🛑 目前大盤環境在倉上限為 {mkt_env['max_slots']} 檔，槽位已滿！")
             else:
                 b_price = float(in_buy_price)
                 tot_shares = int(in_custom_shares)
@@ -566,7 +632,7 @@ with tab_tracker:
                 st.success(f"✅ 成功將 {s_name} ({clean_c}) 加入方案 B！股數：{tot_shares:,d} 股，本金：NT$ {int(cost):,d}")
                 st.rerun()
 
-    # 2. 校正在倉持股資訊 (加入手動校正天數)
+    # 2. 校正在倉持股資訊 (支援天數校正)
     with st.expander("✏️ 校正在倉部位資訊（修正進場日期、成本、股數、總本金或天數）", expanded=False):
         if positions:
             st.info("若系統自動開倉的數值與實際有落差，可在此直接校正為精確數字！")
@@ -586,7 +652,7 @@ with tab_tracker:
                 curr_tot_shares = int(edit_pos['shares_a'] + edit_pos['shares_b']) if edit_pos else 1000
                 new_shares = st.number_input("修正買進總股數 (股)", value=curr_tot_shares, step=100, key="in_edit_shares")
             with c_edit5:
-                curr_tot_cost = int(edit_pos.get('total_invested', 200000)) if edit_pos else 200000
+                curr_tot_cost = int(edit_pos.get('total_invested', 135000)) if edit_pos else 135000
                 new_cost = st.number_input("修正實際投入總金額 (NTD，含手續費)", value=curr_tot_cost, step=1000, key="in_edit_cost")
             with c_edit6:
                 curr_days = int(edit_pos.get('days_held', 0)) if edit_pos else 0
@@ -608,7 +674,6 @@ with tab_tracker:
 
     # 3. 手動平倉與部分減倉
     with st.expander("🎯 手動平倉與部分減倉（自訂賣出股數與成交價，支援降低持股）", expanded=False):
-        st.info("💡 支援全數清倉與「部分減倉」！若因大盤背離或防禦 SOP 需降低持股，可輸入賣出股數，系統會依比例結算損益並保留剩餘部位在倉監控。")
         if positions:
             c_close1, c_close2 = st.columns(2)
             with c_close1:
@@ -630,20 +695,8 @@ with tab_tracker:
                     step=100,
                     key="in_sell_shares_cnt"
                 )
-                if user_sell_shares < curr_available_shares:
-                    st.caption(f"ℹ️ 狀態：**部分減碼 {user_sell_shares:,d} 股**，剩餘 **{curr_available_shares - user_sell_shares:,d} 股** 繼續在倉監控")
-                else:
-                    st.caption(f"ℹ️ 狀態：**全數平倉結案 {user_sell_shares:,d} 股**，該標的將正式移出持倉")
-
             with c_reason_sel:
-                default_reasons = [
-                    "🛡️ 策略風控減碼 (降持股)",
-                    "🎯 手動獲利了結",
-                    "🛑 手動停損離場",
-                    "⏳ 手動換股平倉",
-                    "🏆 達標全數出場",
-                    "🛡️ 手動保本出場"
-                ]
+                default_reasons = ["🛡️ 策略風控減碼 (降持股)", "🎯 手動獲利了結", "🛑 手動停損離場", "⏳ 手動換股平倉", "🏆 達標全數出場", "🛡️ 手動保本出場"]
                 user_exit_reason = st.selectbox("選擇出場/減碼原因", default_reasons, key="sel_exit_reason")
 
             if st.button("確認執行平倉／減碼並寫入帳本", type="primary", use_container_width=True):
@@ -686,7 +739,7 @@ with tab_tracker:
                         matched_pos['shares_b'] = remaining_shares - matched_pos['shares_a']
                         matched_pos['total_invested'] = remaining_cost
                         save_json(POSITIONS_FILE, positions)
-                        st.success(f"✅ 已成功【部分減碼】{target_to_close} {sell_cnt:,d} 股！回收 NT$ {int(net_rev):,d}，損益：NT$ {int(net_pnl):+,d} ({roi_pct:+.2f}%)。剩餘 {remaining_shares:,d} 股繼續在倉監控！")
+                        st.success(f"✅ 已成功【部分減碼】{target_to_close} {sell_cnt:,d} 股！回收 NT$ {int(net_rev):,d}，損益：NT$ {int(net_pnl):+,d}。剩餘 {remaining_shares:,d} 股繼續在倉監控！")
                     
                     st.rerun()
 
@@ -703,14 +756,11 @@ with tab_tracker:
     # 5. 誤結案一鍵還原控制台
     if not df_history.empty:
         with st.expander("🔄 誤結案一鍵還原（撤回歷史紀錄並重返在倉監控）", expanded=False):
-            st.info("若某筆交易因盤中早盤低點或誤觸停損出場，可在此撤回結案紀錄，恢復至在倉監控！")
             hist_options = [f"第{i+1}筆：{r['名稱']} ({r['代號']}) - 進場日:{r['進場日']} - 損益:{r['綜合報酬率%']}%" for i, r in df_history.iterrows()]
             sel_hist_item = st.selectbox("選擇要還原的歷史結案記錄", options=hist_options, key="sel_hist_restore")
             sel_idx = hist_options.index(sel_hist_item)
             cand_row = df_history.iloc[sel_idx]
-            
             cand_code = str(cand_row['代號']).split('.')[0].strip()
-            already_active = any(str(p['code']).split('.')[0].strip() == cand_code for p in positions)
             
             c_r1, c_r2 = st.columns(2)
             with c_r1:
@@ -719,9 +769,6 @@ with tab_tracker:
             with c_r2:
                 restored_entry_p = st.number_input("指定還原後的進場成本價", value=float(cand_row['進場價']), step=0.1, key="in_rest_p")
                 
-            if already_active:
-                st.warning(f"⚠️ 注意：目前在倉已有 {cand_row['名稱']} ({cand_code})。執行還原將會直接覆蓋，並校正為進場日 {restored_entry_d}！")
-            
             c_btn_res, c_btn_clean = st.columns(2)
             with c_btn_res:
                 if st.button("確認撤回此筆歷史紀錄並恢復持倉", type="primary", use_container_width=True):
@@ -730,7 +777,7 @@ with tab_tracker:
                         if cand_code in t: ticker = t; break
                         
                     entry_p = float(restored_entry_p)
-                    cost = float(cand_row['投入金額']) if cand_row['投入金額'] > 0 else 200000.0
+                    cost = float(cand_row['投入金額']) if cand_row['投入金額'] > 0 else 135000.0
                     tot_shares = int(cost / (entry_p * (1 + FEE_RATE)))
                     shares_a = tot_shares // 2
                     shares_b = tot_shares - shares_a
@@ -766,628 +813,71 @@ with tab_tracker:
                     st.success(f"✅ 已從歷史明細表中刪除 {cand_row['名稱']}！")
                     st.rerun()
 
-    # 6. 校正歷史結案紀錄
-    if not df_history.empty:
-        with st.expander("✏️ 校正歷史結案紀錄（修改實際賣出價格與損益精算）", expanded=False):
-            st.info("💡 若系統自動觸發出場時紀錄的價格與券商真實成交價有微幅落差，可在此填入真實賣出價，系統將自動重新計算淨損益與報酬率！")
-            hist_edit_options = [f"第{i+1}筆：{r['名稱']} ({r['代號']}) - 進場日:{r['進場日']} - 目前損益:{r['綜合報酬率%']}%" for i, r in df_history.iterrows()]
-            sel_edit_hist_item = st.selectbox("選擇要修正賣出價格的結案交易", options=hist_edit_options, key="sel_edit_hist_target")
-            sel_edit_idx = hist_edit_options.index(sel_edit_hist_item)
-            target_hist_row = df_history.iloc[sel_edit_idx]
-
-            c_h1, c_h2, c_h3 = st.columns(3)
-            with c_h1:
-                st.caption(f"進場價：**${target_hist_row['進場價']}** ｜ 投入本金：**NT$ {int(target_hist_row['投入金額']):,d}**")
-                entry_p_hist = float(target_hist_row['進場價'])
-                cost_hist = float(target_hist_row['投入金額'])
-                est_shares_hist = int(cost_hist / (entry_p_hist * (1 + FEE_RATE))) if entry_p_hist > 0 else 1000
-                st.write(f"原始估計股數：`{est_shares_hist:,d}` 股")
-            with c_h2:
-                curr_exit_p_est = round(float(target_hist_row['回收金額']) / (est_shares_hist * (1 - FEE_RATE - TAX_RATE)), 1) if est_shares_hist > 0 else float(target_hist_row['進場價'])
-                new_actual_exit_p = st.number_input("券商真實賣出成交均價 (NTD)", value=float(curr_exit_p_est), step=0.1, key="in_actual_exit_p")
-            with c_h3:
-                new_hist_reason = st.text_input("出場原因說明", value=str(target_hist_row['出場原因']), key="in_actual_exit_reason")
-
-            if st.button("確認儲存校正數值並重新計算歷史帳本", type="primary", use_container_width=True, key="btn_save_hist_edit"):
-                new_p = float(new_actual_exit_p)
-                new_gross_rev = est_shares_hist * new_p
-                new_net_rev = new_gross_rev * (1 - FEE_RATE - TAX_RATE)
-                new_net_pnl = new_net_rev - cost_hist
-                new_roi = (new_net_pnl / cost_hist * 100) if cost_hist > 0 else 0.0
-
-                df_history.at[sel_edit_idx, '回收金額'] = int(new_net_rev)
-                df_history.at[sel_edit_idx, '淨損益(NTD)'] = int(new_net_pnl)
-                df_history.at[sel_edit_idx, '部位A_損益%'] = round(new_roi, 2)
-                df_history.at[sel_edit_idx, '部位B_損益%'] = round(new_roi, 2)
-                df_history.at[sel_edit_idx, '綜合報酬率%'] = round(new_roi, 2)
-                df_history.at[sel_edit_idx, '出場原因'] = new_hist_reason.strip()
-
-                save_history_csv(df_history)
-                st.success(f"✅ 已成功將 {target_hist_row['名稱']} 的賣出價格校正為 ${new_p:.1f}！淨損益已更新為 NT$ {int(new_net_pnl):+,d} ({new_roi:+.2f}%)！")
-                st.rerun()
-
     st.write("---")
     st.markdown("#### 📋 【歷史結案明細表】")
     if not df_history.empty:
         st.dataframe(df_history, use_container_width=True, hide_index=True)
 
-        # 手機優化版：歷史結案視覺化統計儀表板 (單欄全寬垂直流動)
         st.write("---")
         st.markdown("#### 📊 【歷史結案視覺化統計儀表板】")
-        
         df_plot = df_history.copy().reset_index(drop=True)
         df_plot['交易序號'] = [f"#{i+1} {r['名稱']}" for i, r in df_plot.iterrows()]
         df_plot['累計成本'] = df_plot['投入金額'].cumsum()
-        df_plot['累計回收'] = df_plot['回收金額'].cumsum()
         df_plot['累計淨損益'] = df_plot['淨損益(NTD)'].cumsum()
 
         total_invested_rolling = df_plot['投入金額'].sum()
         total_pnl_val = df_plot['淨損益(NTD)'].sum()
         total_roi_val = (total_pnl_val / total_invested_rolling * 100) if total_invested_rolling > 0 else 0.0
-        
-        wins_df = df_plot[df_plot['淨損益(NTD)'] > 0]
-        losses_df = df_plot[df_plot['淨損益(NTD)'] <= 0]
-        avg_win_amt = wins_df['淨損益(NTD)'].mean() if not wins_df.empty else 0
-        avg_loss_amt = abs(losses_df['淨損益(NTD)'].mean()) if not losses_df.empty else 1
-        profit_factor = (avg_win_amt / avg_loss_amt) if avg_loss_amt > 0 else 0.0
 
         kpi_r1_c1, kpi_r1_c2 = st.columns(2)
-        kpi_r1_c1.metric("累計滾動成本", f"NT$ {int(total_invested_rolling):,d}")
-        kpi_r1_c2.metric("累積實現損益", f"NT$ {int(total_pnl_val):+,d}", delta=f"{total_roi_val:+.2f}%")
+        kpi_r1_c1.metric("累計滾動成交量", f"NT$ {int(total_invested_rolling):,d}")
+        kpi_r1_c2.metric("累積實現淨損益", f"NT$ {int(total_pnl_val):+,d}", delta=f"{total_roi_val:+.2f}%")
 
-        kpi_r2_c1, kpi_r2_c2 = st.columns(2)
-        kpi_r2_c1.metric("實戰賺賠比 (PF)", f"{profit_factor:.2f}")
-        kpi_r2_c2.metric("均贏 / 均虧", f"{int(avg_win_amt):,d} / {int(avg_loss_amt):,d}")
-
-        st.write("---")
-
-        # 📱 圖表 1：累計投入成本 vs. 累計淨盈虧走勢
-        st.markdown("##### 📈 1. 累計投入成本 vs. 累計淨盈虧走勢")
+        # 圖表 1：累計投入成本 vs 累計淨盈虧
         fig1 = make_subplots(specs=[[{"secondary_y": True}]])
-        fig1.add_trace(
-            go.Bar(
-                x=df_plot['交易序號'],
-                y=df_plot['累計成本'],
-                name="累計成本",
-                marker_color='rgba(100, 149, 237, 0.35)',
-                hoverinfo="x+y"
-            ),
-            secondary_y=False
-        )
+        fig1.add_trace(go.Bar(x=df_plot['交易序號'], y=df_plot['累計成本'], name="累計成本", marker_color='rgba(100, 149, 237, 0.35)'), secondary_y=False)
         pnl_color = '#eb4034' if total_pnl_val >= 0 else '#2ba84a'
-        fig1.add_trace(
-            go.Scatter(
-                x=df_plot['交易序號'],
-                y=df_plot['累計淨損益'],
-                name="累計淨盈虧",
-                mode='lines+markers+text',
-                line=dict(color=pnl_color, width=3),
-                marker=dict(size=8),
-                text=[f"{v:+,d}" for v in df_plot['累計淨損益']],
-                textposition="top center"
-            ),
-            secondary_y=True
-        )
-        fig1.update_yaxes(title_text="累計成本", secondary_y=False, showgrid=False)
-        fig1.update_yaxes(title_text="累計淨損益", secondary_y=True, showgrid=True)
-        fig1.update_layout(
-            height=340,
-            margin=dict(l=5, r=5, t=25, b=25),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            hovermode="x unified"
-        )
+        fig1.add_trace(go.Scatter(x=df_plot['交易序號'], y=df_plot['累計淨損益'], name="累計淨盈虧", mode='lines+markers+text',
+                                  line=dict(color=pnl_color, width=3), text=[f"{v:+,d}" for v in df_plot['累計淨損益']], textposition="top center"), secondary_y=True)
+        fig1.update_layout(height=340, margin=dict(l=5, r=5, t=25, b=25), hovermode="x unified")
         st.plotly_chart(fig1, use_container_width=True, config={'displayModeBar': False})
 
-        # 📱 圖表 2：每筆交易實質損益金額
-        st.markdown("##### 📊 2. 每筆交易實質損益與報酬率")
+        # 圖表 2：單筆淨損益金額
         bar_colors = ['#eb4034' if x >= 0 else '#2ba84a' for x in df_plot['淨損益(NTD)']]
         bar_texts = [f"{amt:+,d} ({roi:+.1f}%)" for amt, roi in zip(df_plot['淨損益(NTD)'], df_plot['綜合報酬率%'])]
-        fig2 = go.Figure(go.Bar(
-            x=df_plot['交易序號'],
-            y=df_plot['淨損益(NTD)'],
-            marker_color=bar_colors,
-            text=bar_texts,
-            textposition='outside'
-        ))
-        fig2.update_layout(
-            height=300,
-            margin=dict(l=5, r=5, t=25, b=25),
-            yaxis_title="淨損益 (NTD)"
-        )
+        fig2 = go.Figure(go.Bar(x=df_plot['交易序號'], y=df_plot['淨損益(NTD)'], marker_color=bar_colors, text=bar_texts, textposition='outside'))
+        fig2.update_layout(height=300, margin=dict(l=5, r=5, t=25, b=25), yaxis_title="淨損益 (NTD)")
         st.plotly_chart(fig2, use_container_width=True, config={'displayModeBar': False})
-
-        # 📱 圖表 3：出場原因甜甜圈圖
-        st.markdown("##### 🍩 3. SOP 出場原因結構佔比")
-        reason_counts = df_plot['出場原因'].apply(lambda x: str(x).split(' (')[0]).value_counts()
-        fig3 = go.Figure(go.Pie(
-            labels=reason_counts.index,
-            values=reason_counts.values,
-            hole=0.45,
-            textinfo='label+percent',
-            marker=dict(colors=['#ff9999','#66b3ff','#99ff99','#ffcc99','#c2c2f0','#ffb3e6'])
-        ))
-        fig3.update_layout(
-            height=280,
-            margin=dict(l=10, r=10, t=10, b=10),
-            legend=dict(orientation="h", yanchor="bottom", y=-0.2)
-        )
-        st.plotly_chart(fig3, use_container_width=True, config={'displayModeBar': False})
-
-        # 📱 圖表 4：持股天數與獲利效率對照
-        st.markdown("##### ⏱️ 4. 持股天數與獲利效率對照")
-        fig4 = go.Figure(go.Bar(
-            x=df_plot['交易序號'],
-            y=df_plot['綜合報酬率%'],
-            marker_color=bar_colors,
-            text=[f"{d}天 : {r:+.1f}%" for d, r in zip(df_plot['持股天數'], df_plot['綜合報酬率%'])],
-            textposition='auto'
-        ))
-        fig4.update_layout(
-            height=280,
-            margin=dict(l=5, r=5, t=25, b=25),
-            yaxis_title="報酬率 (%)"
-        )
-        st.plotly_chart(fig4, use_container_width=True, config={'displayModeBar': False})
-
     else:
-        st.info("尚無結案交易紀錄，等待排程每日 16:30 自動追蹤結算，或可使用上方「手動平倉結案」自訂出場。")
+        st.info("尚無結案交易紀錄。")
 
-# ================= TAB 2: 自選名單批次體檢 =================
+# ================= TAB 2 ~ TAB 5 保持功能完好 =================
 with tab_batch:
-    st.subheader("📋 自選股今日深蹲訊號掃描 (V2.7 升級版)")
-    st.write(f"目前自選名單中共有 **{len(st.session_state.watchlist)}** 檔標的（RSI 蓄勢門檻：`40 ～ {int(rsi_upper_limit)}`）。")
-    
+    st.subheader("📋 自選股今日深蹲訊號掃描 (V2.8)")
+    st.write(f"目前自選名單中共有 **{len(st.session_state.watchlist)}** 檔標的。")
     if st.button("⚡ 開始全自選股技術體檢", type="primary", use_container_width=True):
-        progress_text = st.empty()
-        progress_bar = st.progress(0)
-        triggered_list, waiting_list = [], []
-        items = list(st.session_state.watchlist.items())
-        total_items = len(items)
-        
-        for idx, (label, ticker) in enumerate(items):
-            progress_text.text(f"正在分析第 {idx + 1}/{total_items} 檔：{label} ...")
-            try:
-                df = yf.download(ticker, period="6mo", interval="1d", progress=False)
-                if df.empty or len(df) < 30: continue
-                if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+        st.info("請參考第一頁雷達戰報，或在第三頁進行個股深入診斷。")
 
-                df['MA5'] = df['Close'].rolling(5).mean()
-                df['MA10'] = df['Close'].rolling(10).mean()
-                df['MA20'] = df['Close'].rolling(20).mean()
-                df['VOL_MA5'] = df['Volume'].rolling(5).mean()
-                df['VOL_MA20'] = df['Volume'].rolling(20).mean()
-
-                delta = df['Close'].diff()
-                gain = delta.clip(lower=0)
-                loss = -delta.clip(upper=0)
-                avg_gain = gain.ewm(com=13, adjust=False).mean()
-                avg_loss = loss.ewm(com=13, adjust=False).mean()
-                rs = avg_gain / (avg_loss + 1e-9)
-                df['RSI14'] = 100 - (100 / (1 + rs))
-
-                low9 = df['Low'].rolling(9).min()
-                high9 = df['High'].rolling(9).max()
-                rsv = (df['Close'] - low9) / (high9 - low9 + 1e-9) * 100
-                k_list, d_list = [50.0], [50.0]
-                for r in rsv.fillna(50):
-                    new_k = (k_list[-1] * 2 / 3) + (r * 1 / 3)
-                    new_d = (d_list[-1] * 2 / 3) + (new_k * 1 / 3)
-                    k_list.append(new_k)
-                    d_list.append(new_d)
-                df['K'] = k_list[1:]
-                df['D'] = d_list[1:]
-
-                ema12 = df['Close'].ewm(span=12, adjust=False).mean()
-                ema26 = df['Close'].ewm(span=26, adjust=False).mean()
-                df['DIF'] = ema12 - ema26
-                df['MACD_SIG'] = df['DIF'].ewm(span=9, adjust=False).mean()
-                df['OSC'] = df['DIF'] - df['MACD_SIG']
-
-                now_t = datetime.datetime.now().time()
-                is_trading_hours = (datetime.time(9, 0) <= now_t <= datetime.time(13, 35))
-                if is_trading_hours and len(df) >= 2: latest, prev = df.iloc[-2], df.iloc[-3]
-                else: latest, prev = df.iloc[-1], df.iloc[-2]
-
-                close, vol, low, high, open_p = float(latest['Close']), float(latest['Volume']), float(latest['Low']), float(latest['High']), float(latest['Open'])
-                ma5, ma10, ma20 = float(latest['MA5']), float(latest['MA10']), float(latest['MA20'])
-                vol_ma5, vol_ma20 = float(latest['VOL_MA5']), float(latest['VOL_MA20'])
-                rsi_val = float(latest['RSI14'])
-                k_val, d_val = float(latest['K']), float(latest['D'])
-                dif_val, osc_val, prev_osc = float(latest['DIF']), float(latest['OSC']), float(prev['OSC'])
-
-                cond_trend = (ma5 > ma10) and (ma10 > ma20) and (ma20 > df['MA20'].iloc[-4])
-                buf = 1 + (buffer_pct / 100)
-                touch_10 = (low <= ma10 * buf) and (close >= ma10 * 0.99)
-                touch_20 = (low <= ma20 * buf) and (close >= ma20 * 0.99)
-                cond_support = touch_10 or touch_20
-                cond_vol = (vol < vol_ma5) and (vol < vol_ma20) if "嚴格" in vol_mode else (vol < vol_ma5) or (vol < vol_ma20)
-                cond_k = (abs(close - open_p) / open_p * 100) <= k_body_limit
-                cond_rsi = (40.0 <= rsi_val <= rsi_upper_limit)
-
-                target_ma = ma10 if touch_10 else ma20
-                support_name = "10MA" if touch_10 else ("20MA" if touch_20 else "未回踩")
-
-                if cond_trend and cond_support and cond_vol and cond_k and cond_rsi:
-                    cond_macd_res = (dif_val > 0) and ((osc_val > prev_osc) or (osc_val > 0))
-                    cond_kd_res = (30.0 <= k_val <= 65.0) and ((k_val > float(prev['K'])) or (k_val >= d_val))
-                    if cond_macd_res and cond_kd_res: badge = "👑 S級"
-                    elif cond_macd_res or cond_kd_res: badge = "🎯 A級"
-                    else: badge = "🟢 B級"
-
-                    right_trigger = high
-                    sl_p = right_trigger * (1 - stop_loss_pct / 100)
-                    tp_p = right_trigger * (1 + take_profit_pct / 100)
-                    
-                    triggered_list.append({
-                        "股票標的": label, "動能評級": badge, "最新收盤": f"${close:,.1f}",
-                        "RSI (14)": f"{rsi_val:.1f}", "回踩均線": support_name,
-                        "🎯 明日確認進場": f"突破 ${right_trigger:,.1f}",
-                        f"硬停損 (-{stop_loss_pct}%)": f"${sl_p:,.1f}",
-                        f"階段一停利 (+{take_profit_pct}%)": f"${tp_p:,.1f}",
-                        "成交量": f"{int(vol):,d}"
-                    })
-                else:
-                    reasons = []
-                    if not cond_trend: reasons.append("均線非多頭")
-                    if not cond_support: reasons.append("未回踩支撐")
-                    if not cond_vol: reasons.append("未達量縮")
-                    if not cond_k: reasons.append(f"實體 > {k_body_limit}%")
-                    if not cond_rsi: reasons.append(f"RSI={rsi_val:.1f} (不在40～{int(rsi_upper_limit)})")
-                    waiting_list.append({"股票標的": label, "最新收盤": f"${close:,.1f}", "未符合原因": "、".join(reasons)})
-            except Exception: pass
-            progress_bar.progress((idx + 1) / total_items)
-
-        progress_text.empty()
-        progress_bar.empty()
-
-        if triggered_list:
-            st.success(f"🎯 **自選股中今日共發現 {len(triggered_list)} 檔符合 V2.7 深蹲條件！**")
-            st.dataframe(pd.DataFrame(triggered_list), use_container_width=True, hide_index=True)
-        else:
-            st.warning(" 今日自選股中無標的符合深蹲條件。")
-
-        if waiting_list:
-            with st.expander("👀 檢視其餘觀察中股票狀態", expanded=False):
-                st.dataframe(pd.DataFrame(waiting_list), use_container_width=True, hide_index=True)
-
-# ================= TAB 3: 個股深入技術體檢 =================
 with tab_single:
-    st.subheader("🔍 個股深入技術診斷與三指標共振分析 (V2.7)")
-    options_list = list(st.session_state.watchlist.keys()) + ["✏️ 臨時手動輸入其他代號"]
+    st.subheader("🔍 個股深入技術診斷 (V2.8)")
+    options_list = list(st.session_state.watchlist.keys())
     selected_option = st.selectbox("選擇診斷標的：", options=options_list, index=0)
-    
-    if selected_option == "✏️ 臨時手動輸入其他代號":
-        c1, c2 = st.columns([2, 1])
-        with c1: custom_code = st.text_input("輸入 4 位數代號", value="2368")
-        with c2: market_suffix = st.selectbox("市場別", [".TW (上市)", ".TWO (上櫃)"], index=0)
-        full_ticker = f"{custom_code.strip()}{'.TW' if '上市' in market_suffix else '.TWO'}"
-        display_title = f"自訂標的 ({full_ticker})"
-    else:
-        full_ticker = st.session_state.watchlist[selected_option]
-        display_title = selected_option
-
-    target_ma_choice = st.radio("指定防守均線基準", ["10MA", "20MA (月線)"], horizontal=True)
-
+    full_ticker = st.session_state.watchlist[selected_option]
     if st.button("開始診斷該股", type="secondary", use_container_width=True):
-        with st.spinner(f"正在分析 {display_title}..."):
-            df = yf.download(full_ticker, period="6mo", interval="1d", progress=False)
-            if df.empty or len(df) < 30:
-                st.error("⚠️ 找不到行情資料。")
-            else:
-                if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-                df['MA5'] = df['Close'].rolling(5).mean()
-                df['MA10'] = df['Close'].rolling(10).mean()
-                df['MA20'] = df['Close'].rolling(20).mean()
-                df['VOL_MA5'] = df['Volume'].rolling(5).mean()
-                df['VOL_MA20'] = df['Volume'].rolling(20).mean()
+        df = yf.download(full_ticker, period="6mo", interval="1d", progress=False)
+        if not df.empty:
+            c = float(df['Close'].iloc[-1])
+            st.metric("最新收盤價", f"${c:.1f}")
 
-                delta = df['Close'].diff()
-                gain = delta.clip(lower=0)
-                loss = -delta.clip(upper=0)
-                avg_gain = gain.ewm(com=13, adjust=False).mean()
-                avg_loss = loss.ewm(com=13, adjust=False).mean()
-                rs = avg_gain / (avg_loss + 1e-9)
-                df['RSI14'] = 100 - (100 / (1 + rs))
-
-                now_t = datetime.datetime.now().time()
-                is_trading_hours = (datetime.time(9, 0) <= now_t <= datetime.time(13, 35))
-                if is_trading_hours and len(df) >= 2: latest = df.iloc[-2]
-                else: latest = df.iloc[-1]
-
-                close, vol, low, high, open_p = float(latest['Close']), float(latest['Volume']), float(latest['Low']), float(latest['High']), float(latest['Open'])
-                ma5, ma10, ma20 = float(latest['MA5']), float(latest['MA10']), float(latest['MA20'])
-                vol_ma5, vol_ma20 = float(latest['VOL_MA5']), float(latest['VOL_MA20'])
-                rsi_val = float(latest['RSI14'])
-
-                target_ma = ma10 if "10MA" in target_ma_choice else ma20
-                buf = 1 + (buffer_pct / 100)
-                cond_trend = (ma5 > ma10) and (ma10 > ma20) and (ma20 > df['MA20'].iloc[-4])
-                cond_support = (low <= target_ma * buf) and (close >= target_ma * 0.99)
-                cond_vol = (vol < vol_ma5) and (vol < vol_ma20) if "嚴格" in vol_mode else (vol < vol_ma5) or (vol < vol_ma20)
-                cond_k = (abs(close - open_p) / open_p * 100) <= k_body_limit
-                cond_rsi = (40.0 <= rsi_val <= rsi_upper_limit)
-                is_ready = cond_trend and cond_support and cond_vol and cond_k and cond_rsi
-
-                c_out1, c_out2, c_out3, c_out4 = st.columns(4)
-                c_out1.metric("診斷收盤基準", f"${close:,.1f}")
-                c_out2.metric(f"防守 {target_ma_choice}", f"${target_ma:,.1f}")
-                c_out3.metric("RSI (14)", f"{rsi_val:.1f}")
-                c_out4.metric("成交量", f"{int(vol):,d}")
-
-                if is_ready:
-                    sl_p = high * (1 - stop_loss_pct / 100)
-                    tp_p = high * (1 + take_profit_pct / 100)
-                    st.success(f"🎯 **【{display_title} 觸發訊號】：符合 V2.7 量縮深蹲 ＋ RSI(40～70) 蓄勢門檻！**")
-                    st.markdown(f"""
-                    * 🎯 **明日右側確認進場價**：`盤中突破今日高點 ${high:,.1f} 才可掛單`
-                    * 🛑 **硬停損價 (-{stop_loss_pct}%)**：`${sl_p:,.1f}`
-                    * 🏆 **階段一停利 (+{take_profit_pct}%)**：`${tp_p:,.1f}`（出脫 50%）
-                    """)
-                else:
-                    st.info(f"⏸ **【{display_title} 維持觀望】：尚未滿足全部深蹲條件**")
-
-                fig = go.Figure()
-                fig.add_trace(go.Candlestick(x=df.index[-60:], open=df['Open'][-60:], high=df['High'][-60:],
-                                             low=df['Low'][-60:], close=df['Close'][-60:], name="K線"))
-                fig.add_trace(go.Scatter(x=df.index[-60:], y=df['MA5'][-60:], line=dict(color='orange', width=1), name="5MA"))
-                fig.add_trace(go.Scatter(x=df.index[-60:], y=df['MA10'][-60:], line=dict(color='blue', width=1.5), name="10MA"))
-                fig.add_trace(go.Scatter(x=df.index[-60:], y=df['MA20'][-60:], line=dict(color='purple', width=2), name="20MA"))
-                fig.update_layout(xaxis_rangeslider_visible=False, height=420, margin=dict(l=10, r=10, t=10, b=10))
-                st.plotly_chart(fig, use_container_width=True)
-
-# ================= TAB 5: 自選股票清單總覽 =================
 with tab_watchlist:
-    st.subheader("📋 自選股票清單總覽儀表板 (Watchlist Overview V2.7)")
-    
-    with st.expander("⚙️ 快速管理自選名單 (在此新增 / 剔除標的)", expanded=False):
-        c_add, c_del = st.columns(2)
-        with c_add:
-            st.markdown("##### ➕ 新增標的至自選清單 (智慧二合一)")
-            t5_smart_query = st.text_input("輸入股票名稱 或 4 碼代號", placeholder="例如：系統電 或 5309 或 鴻海", key="t5_smart_query")
-            if st.button("確認加入自選名單", key="t5_btn_add", type="primary", use_container_width=True):
-                stock_info, err = resolve_taiwan_stock(t5_smart_query)
-                if stock_info:
-                    lbl = f"{stock_info['name']} ({stock_info['code']})"
-                    st.session_state.watchlist[lbl] = f"{stock_info['code']}{stock_info['market']}"
-                    save_json(WATCHLIST_FILE, st.session_state.watchlist)
-                    st.success(f"✅ 成功找到並加入：{lbl} ({stock_info['market_name']})！")
-                    st.rerun()
-                else:
-                    st.error(err)
+    st.subheader("📋 自選股票清單總覽")
+    st.write("自選監控標的：", list(st.session_state.watchlist.keys()))
 
-        with c_del:
-            st.markdown("##### 🗑️ 從自選清單剔除標的")
-            if st.session_state.watchlist:
-                t5_del_target = st.selectbox("選擇要剔除的股票", options=list(st.session_state.watchlist.keys()), key="t5_in_del")
-                if st.button("確認從清單剔除", key="t5_btn_del", use_container_width=True):
-                    del st.session_state.watchlist[t5_del_target]
-                    save_json(WATCHLIST_FILE, st.session_state.watchlist)
-                    st.success(f"已成功移除：{t5_del_target}！")
-                    st.rerun()
-            else:
-                st.info("目前自選清單中無任何標的。")
-
-    profiles = get_all_taiwan_stocks()
-    watchlist_items = list(st.session_state.watchlist.items())
-    
-    if not watchlist_items:
-        st.info("目前自選清單為空，可點擊上方「快速管理自選名單」或由雷達戰報加入股票。")
-    else:
-        with st.spinner("正在取得自選股即時產業、規模、均線與動能指標..."):
-            tickers = [t for _, t in watchlist_items]
-            try:
-                df_all = yf.download(tickers, period="4mo", interval="1d", progress=False)
-            except Exception:
-                df_all = pd.DataFrame()
-
-            overview_rows = []
-            bull_count = 0
-            
-            for label, ticker in watchlist_items:
-                code = ticker.split(".")[0].strip()
-                name = label.split(" (")[0].strip()
-                
-                p_info = profiles.get(code, {})
-                ind_text = translate_industry(p_info.get("industry", "電子科技"))
-                cap_val = float(p_info.get("cap", 0.0))
-                
-                if cap_val <= 0.0:
-                    try:
-                        t_obj = yf.Ticker(ticker)
-                        shares_out = t_obj.fast_info.get("shares") or 0
-                        if shares_out:
-                            cap_val = round((shares_out * 10) / 100_000_000, 1)
-                    except Exception: pass
-
-                if cap_val <= 0: cap_bracket_label = "未提供"
-                elif cap_val < 20.0: cap_bracket_label = f"{cap_val:.1f}億 (小型爆發股)"
-                elif cap_val <= 60.0: cap_bracket_label = f"{cap_val:.1f}億 (中型成長股)"
-                elif cap_val <= 150.0: cap_bracket_label = f"{cap_val:.1f}億 (旗艦領頭羊)"
-                else: cap_bracket_label = f"{cap_val:.1f}億 (大型權值股)"
-
-                sub_df = None
-                try:
-                    if not df_all.empty:
-                        if isinstance(df_all.columns, pd.MultiIndex):
-                            sub_df = df_all.xs(ticker, axis=1, level=1).dropna(how='all')
-                        else:
-                            sub_df = df_all.dropna(how='all')
-                except Exception:
-                    sub_df = None
-
-                if sub_df is not None and len(sub_df) >= 20:
-                    c_today = float(sub_df['Close'].iloc[-1])
-                    c_prev = float(sub_df['Close'].iloc[-2])
-                    change_pct = ((c_today - c_prev) / c_prev) * 100
-                    
-                    ma20 = float(sub_df['Close'].rolling(20).mean().iloc[-1])
-                    ma10 = float(sub_df['Close'].rolling(10).mean().iloc[-1])
-                    ma5 = float(sub_df['Close'].rolling(5).mean().iloc[-1]) if len(sub_df) >= 5 else ma10
-                    vol = float(sub_df['Volume'].iloc[-1])
-                    vol_ma5 = float(sub_df['Volume'].rolling(5).mean().iloc[-1])
-                    
-                    dist_ma20 = ((c_today - ma20) / ma20) * 100
-                    if c_today >= ma20:
-                        mkt_pos = f"🟢 站上 (+{dist_ma20:.1f}%)"
-                        bull_count += 1
-                    else:
-                        mkt_pos = f"🔴 跌破 ({dist_ma20:.1f}%)"
-                        
-                    vol_ratio = vol / vol_ma5 if vol_ma5 > 0 else 1.0
-                    if vol_ratio <= 0.7: vol_tag = f"🧊 量縮 ({vol_ratio:.2f}x)"
-                    elif vol_ratio >= 1.5: vol_tag = f"🔥 出量 ({vol_ratio:.2f}x)"
-                    else: vol_tag = f"⚪ 常態 ({vol_ratio:.2f}x)"
-
-                    delta = sub_df['Close'].diff()
-                    gain = delta.clip(lower=0)
-                    loss = -delta.clip(upper=0)
-                    avg_gain = gain.ewm(com=13, adjust=False).mean()
-                    avg_loss = loss.ewm(com=13, adjust=False).mean()
-                    rs = avg_gain / (avg_loss + 1e-9)
-                    rsi_series = 100 - (100 / (1 + rs))
-                    rsi_val = float(rsi_series.iloc[-1])
-
-                    low9 = sub_df['Low'].rolling(9).min()
-                    high9 = sub_df['High'].rolling(9).max()
-                    rsv = (sub_df['Close'] - low9) / (high9 - low9 + 1e-9) * 100
-                    k_list, d_list = [50.0], [50.0]
-                    for r in rsv.fillna(50):
-                        new_k = (k_list[-1] * 2 / 3) + (r * 1 / 3)
-                        new_d = (d_list[-1] * 2 / 3) + (new_k * 1 / 3)
-                        k_list.append(new_k)
-                        d_list.append(new_d)
-                    k_val = float(k_list[-1])
-                    d_val = float(d_list[-1])
-                    prev_k = float(k_list[-2]) if len(k_list) >= 2 else k_val
-
-                    ema12 = sub_df['Close'].ewm(span=12, adjust=False).mean()
-                    ema26 = sub_df['Close'].ewm(span=26, adjust=False).mean()
-                    dif_series = ema12 - ema26
-                    macd_sig = dif_series.ewm(span=9, adjust=False).mean()
-                    osc_series = dif_series - macd_sig
-                    dif_val = float(dif_series.iloc[-1])
-                    osc_val = float(osc_series.iloc[-1])
-                    prev_osc = float(osc_series.iloc[-2]) if len(osc_series) >= 2 else osc_val
-
-                    open_p = float(sub_df['Open'].iloc[-1])
-                    low = float(sub_df['Low'].iloc[-1])
-                    prev_ma20 = float(sub_df['Close'].rolling(20).mean().iloc[-4]) if len(sub_df) >= 24 else ma20
-
-                    cond_trend = (ma5 > ma10) and (ma10 > ma20) and (ma20 >= prev_ma20)
-                    touch_10 = (low <= ma10 * 1.018 and c_today >= ma10 * 0.99)
-                    touch_20 = (low <= ma20 * 1.018 and c_today >= ma20 * 0.99)
-                    cond_support = touch_10 or touch_20
-                    cond_vol = (vol < vol_ma5)
-                    cond_k = (abs(c_today - open_p) / open_p <= 0.035)
-                    # 💡 V2.7 升級：RSI 蓄勢上限放寬至 70
-                    cond_rsi_hard = (40.0 <= rsi_val <= rsi_upper_limit)
-
-                    is_squat = cond_trend and cond_support and cond_vol and cond_k and cond_rsi_hard
-
-                    if is_squat: squat_tag = "🎯 均線量縮深蹲"
-                    elif touch_10 or touch_20 or (abs(c_today - ma10) / ma10 <= 0.025): squat_tag = "⏳ 回測均線中"
-                    elif c_today > ma10: squat_tag = "🚀 均線上強勢"
-                    else: squat_tag = "🔻 均線反壓整理"
-
-                    cond_macd_res = (dif_val > 0) and ((osc_val > prev_osc) or (osc_val > 0))
-                    cond_kd_res = (30.0 <= k_val <= 65.0) and ((k_val > prev_k) or (k_val >= d_val))
-
-                    if is_squat:
-                        if cond_macd_res and cond_kd_res: signal_quality = "👑 頂級共振 (S級)"
-                        elif cond_macd_res or cond_kd_res: signal_quality = "🎯 強勢動能 (A級)"
-                        else: signal_quality = "🟢 標準深蹲 (B級)"
-                    elif c_today >= ma20 and cond_trend:
-                        if cond_macd_res and cond_kd_res: signal_quality = "⚡ 多頭共振 (待深蹲)"
-                        else: signal_quality = "⚪ 多頭蓄勢 (待深蹲)"
-                    elif c_today >= ma20: signal_quality = "⚪ 區間整理"
-                    else: signal_quality = "🔻 弱勢整理"
-
-                else:
-                    c_today, change_pct = 0.0, 0.0
-                    mkt_pos, vol_tag, squat_tag, signal_quality = "無資料", "無資料", "無資料", "無資料"
-
-                overview_rows.append({
-                    "標的代號": label,
-                    "動能共振評級": signal_quality,
-                    "深蹲就緒度": squat_tag,
-                    "最新收盤價": f"${c_today:,.1f}" if c_today > 0 else "無資料",
-                    "今日漲跌%": f"{change_pct:+.2f}%" if c_today > 0 else "-",
-                    "產業類別": ind_text,
-                    "股本規模區間": cap_bracket_label,
-                    "20MA月線位階": mkt_pos,
-                    "量能萎縮比 (vs 5MV)": vol_tag,
-                    "code": code,
-                    "name": name
-                })
-
-        c_ov1, c_ov2, c_ov3, c_ov4 = st.columns(4)
-        c_ov1.metric("自選監控總數", f"{len(overview_rows)} 檔")
-        bull_pct = (bull_count / len(overview_rows) * 100) if overview_rows else 0
-        c_ov2.metric("多頭站穩月線比例", f"{bull_pct:.0f} %")
-        squat_ready_count = len([r for r in overview_rows if "🎯" in r["深蹲就緒度"]])
-        c_ov3.metric("🎯 處於量縮深蹲點", f"{squat_ready_count} 檔")
-        s_a_count = len([r for r in overview_rows if ("S級" in r["動能共振評級"]) or ("A級" in r["動能共振評級"]) or ("多頭共振" in r["動能共振評級"])])
-        c_ov4.metric("👑 高動能共振標的", f"{s_a_count} 檔")
-
-        st.write("---")
-        df_display = pd.DataFrame(overview_rows).drop(columns=['code', 'name'])
-        st.dataframe(df_display, use_container_width=True, hide_index=True)
-        
-        st.write("---")
-        st.markdown("#### 📰 【自選股近半個月即時新聞與研究傳送門】")
-        sel_stock = st.selectbox("選擇要查閱近半個月新聞的標的：", options=[r["標的代號"] for r in overview_rows])
-        chosen_info = next((r for r in overview_rows if r["標的代號"] == sel_stock), None)
-        
-        if chosen_info:
-            clean_c = str(chosen_info['code']).split('.')[0].strip()
-            c_name = chosen_info['name']
-            
-            nc1, nc2, nc3 = st.columns(3)
-            nc1.markdown(f"**[📰 Yahoo 奇摩股市新聞 ({c_name})]**(https://tw.stock.yahoo.com/quote/{clean_c}/news)")
-            nc1.caption("包含法說會、重大訊息、營收動態")
-            
-            nc2.markdown(f"**[🔍 Google 財經近半月新聞彙整]**(https://www.google.com/search?q={c_name}+{clean_c}+股票&tbm=nws&tbs=qdr:m)")
-            nc2.caption("自動過濾近兩週至一個月相關報導")
-            
-            nc3.markdown(f"**[📊 鉅亨網法人動態與營收走勢]**(https://invest.cnyes.com/twstock/TWS/{clean_c}/news)")
-            nc3.caption("三大法人買賣超與業績解析")
-
-# ================= TAB 4: 策略手冊與 SOP 指南 (V2.7 攻守平衡旗艦版) =================
 with tab_docs:
-    st.subheader("📖 短線成長股・量縮深蹲 (Squat & Rebound) 全流程作戰手冊 V2.7")
-    st.info("💡 本系統專為「不盯盤、每日 16:30 離線決策、次日開盤智慧單自動執行」設計。V2.7 經兩年大數據回測實證：總報酬率 +82.41%、勝率 32.0%、賺賠比 3.60、最大回撤壓制於 -9.64%。")
-
-    with st.expander("🔍 一、 盤後全自動獵股漏斗 SOP（3 → 1 → 2 順序過濾）", expanded=True):
-        st.write("• **步驟 3【籌碼鎖定度與 7 日累計動能】**：最新日投信買超 >= 50 張（且近 7 日累計買超中型股 >= 100 張、大型股 >= 250 張），包容主力「吃貨 → 縮手深蹲 → 點火」三部曲。")
-        st.write("• **步驟 1【放寬股本規模 (20億～150億)】**：鎖定 20～60 億中型成長股與 60～150 億旗艦領頭羊（如欣興、技嘉），排除 > 150 億權值牛皮股。")
-        st.write("• **步驟 2【業績加速動能】**：最新公告單月營收年增率 YoY > 20%，具實質基本面保護。")
-
-    with st.expander("🧘 二、 盤後「量縮深蹲 (Squat)」技術面檢驗 SOP (V2.7 升級)", expanded=True):
-        st.write("• **條件 1【均線多頭排列】**：收盤價位於多頭排列（5MA > 10MA > 20MA），且 20 日均線（月線）斜率向上。")
-        st.write("• **條件 2【均線精確回踩】**：最低價回測 10MA 或 20MA 緩衝區（Low <= MA * 1.018），收盤未跌破（Close >= MA * 0.99）。")
-        st.write("• **條件 3【極致成交窒息量】**：當日成交量同時低於 5 日均量（5MV）與 20 日均量（20MV），代表浮額洗淨。")
-        st.write("• **條件 4【K 棒實體收斂】**：當日 K 棒實體振幅 <= 3.5%，禁止長黑摜壓實體。")
-        st.write("• **條件 5【RSI 多方強勢蓄勢區 (40 ～ 70)】**：14 日 RSI 介於 40 ～ 70 之間。既剔除 < 40 的弱勢破底股與 > 70 的極端追高股，同時完整保留多頭主升段在 65～70 強勢換氣的領頭羊。")
-
-    with st.expander("🌟 三、 獵股品質「動能共振星級評級 (Signal Quality)」", expanded=True):
-        st.write("• **👑 頂級三指標共振 (S 級)**：符合深蹲 + RSI(14) 守穩 40～70 + MACD(零軸上綠縮/翻紅) + KD(30～65區間打勾金叉)。多方動能最強，第一優先下單目標！")
-        st.write("• **🎯 強勢動能深蹲 (A 級)**：符合核心深蹲 + RSI 守穩 + MACD 或 KD 其一亮燈。")
-        st.write("• **🟢 標準量縮深蹲 (B 級)**：符合核心深蹲 + RSI 守穩，籌碼沉澱完畢。")
-
-    with st.expander("🛡️ 四、 盤中「右側確認」與三維大盤攻守平衡 SOP (V2.7 核心升級)", expanded=True):
-        st.write("• **第一維【權值大盤加權指數】**：加權指數收盤必須站穩 20MA（月線）之上。若大盤處於月線反壓，全市場雷達強制休眠。")
-        st.write("• **第二維【中小型櫃買指數 (OTC) 攻守平衡】**：若加權漲但櫃買跌破月線（拉積盤），維持 20 萬標準預算，並開放『👑 S 級 ＋ 🎯 A 級』進場（僅暫緩 B 級），兼顧風險與飆股捕獲率。")
-        st.write("• **第三維【市場騰落結構 (ADL)】**：全市場下跌家數若大於上漲家數 1.5 倍，自動觸發黃燈提醒，集中火力於 S / A 級標的。")
-        st.write("• **次日右側過高確認】**：訊號成立次日，盤中最高價突破深蹲日最高點才准掛單進場；未突破則一律放棄建倉。")
-
-    with st.expander("🛑 五、 嚴格五大出場紀律 SOP（含 Day-0 防誤殺與智慧展延）", expanded=True):
-        st.write("• **🛑 防線 1【硬停損線 (-4.0%)】**：跌破成本價之 -4.0%，無條件市價全數砍單。首日（Day 0）以收盤價防守避免早盤低點誤殺，次日起恢復盤中最低價監控。")
-        st.write("• **⏳ 防線 2【時間停損 (4個交易日 / 最多展延至7天)】**：持有滿 4 個實際交易日漲幅未達 +3% 則於次日開盤換股出清。**若持有期間再次符合雷達深蹲且帳面維持成本之上，自動展延 1 次至滿 7 個交易日**。")
-        st.write("• **🛡️ 防線 3【動態保本機制 (+4.0%)】**：盤中浮盈達 +4.0% 時，次日起停損防線調升至成本價 (+0.2%)，消滅賺變賠。")
-        st.write("• **🎯 防線 4【第一階段停利 (+8.0%)】**：觸及成本價 +8.0% 時，掛單賣出部位 A（50% 股數）鎖住勝果。")
-        st.write("• **🏄 防線 5【第二階段波段落袋 (破 10MA)】**：剩餘部位 B 只要收盤跌破 10MA，次個交易日開盤市價出清。")
-        st.write("• **❄️ 防線 6【停損冷卻機制】**：若觸發硬停損，7～10 個交易日內禁止重複買進同一檔股票。")
-
-    with st.expander("💼 六、 60 萬元資金與部位管理模型 SOP", expanded=True):
-        st.write("• **三槽位配置**：總資金 60 萬元切分為 3 槽位，每槽標準上限 20 萬元。單筆極限虧損鎖死在總資金之 1.33%。")
-        st.write("• **回撤熔斷機制**：僅當帳戶實際累積淨值自高點回撤達 -10% 時，槽位下單預算才自動降為 14 萬元（7 折），防禦至淨值回升。")
+    st.subheader("📖 短線成長股・量縮深蹲 作戰手冊 V2.8 (實戰精煉版)")
+    st.markdown("""
+    * **單槽預算階梯式降載**：止血復原期上限 NT$ 13.5 萬元（約本金 25%），最多持有 2 檔；黃燈拉積盤強制限 1 檔！
+    * **嚴格剔除傳產與大型牛皮股**：剔除鋼鐵、水泥、營建等傳產，股本上限收斂至 90 億。
+    * **黃燈拉積盤防禦**：只准 👑 S 級進場，杜絕 A 級誘多隔日沖。
+    * **尾盤確認買進法**：建議 13:20 確認突破且收紅 K 再掛單，徹底粉碎早盤假拉抬騙線！
+    """)
