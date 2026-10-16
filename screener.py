@@ -10,6 +10,8 @@ REPORT_FILE = "radar_report.json"
 PENDING_FILE = "pending_orders.json"
 POSITIONS_FILE = "positions.json"
 
+TW_TZ = datetime.timezone(datetime.timedelta(hours=8))
+
 TW_INDUSTRY_MAP = {
     "01": "水泥工業", "02": "食品工業", "03": "塑膠工業", "04": "紡織纖維",
     "05": "電機機械", "06": "電器電纜", "07": "化學生技", "08": "玻璃陶瓷",
@@ -100,18 +102,19 @@ def get_revenue_map():
 def get_trust_buy_7d_map():
     """
     往回抓取最近 7 個有效交易日的證交所 (T86) 與櫃買中心三大法人報表，
-    精確計算每一檔股票的「最新單日投信買超 (trust_1d)」與「近 7 日累積投信買超 (trust_7d)」
+    計算「最新單日投信買超 (trust_1d)」與「近 7 日累積投信買超 (trust_7d)」
     """
     trust_1d = {}
     trust_7d = {}
     headers = {"User-Agent": "Mozilla/5.0"}
+    now_tw = datetime.datetime.now(TW_TZ).date()
 
-    # 1. 上市 (TWSE T86) - 收集最近 7 個有效開盤日
+    # 1. 上市 (TWSE T86)
     twse_days_collected = 0
-    for offset in range(0, 16):
+    for offset in range(0, 18):
         if twse_days_collected >= 7:
             break
-        dt = datetime.date.today() - datetime.timedelta(days=offset)
+        dt = now_tw - datetime.timedelta(days=offset)
         if dt.weekday() >= 5:
             continue
         d_twse = dt.strftime("%Y%m%d")
@@ -133,16 +136,16 @@ def get_trust_buy_7d_map():
                                 trust_7d[code] = trust_7d.get(code, 0) + net_lots
                             except Exception:
                                 pass
-                    time.sleep(0.3)
+                    time.sleep(0.25)
         except Exception:
             pass
 
-    # 2. 上櫃 (TPEX) - 收集最近 7 個有效開盤日
+    # 2. 上櫃 (TPEX)
     tpex_days_collected = 0
-    for offset in range(0, 16):
+    for offset in range(0, 18):
         if tpex_days_collected >= 7:
             break
-        dt = datetime.date.today() - datetime.timedelta(days=offset)
+        dt = now_tw - datetime.timedelta(days=offset)
         if dt.weekday() >= 5:
             continue
         roc_yr = dt.year - 1911
@@ -166,7 +169,7 @@ def get_trust_buy_7d_map():
                                 trust_7d[code] = trust_7d.get(code, 0) + net_lots
                             except Exception:
                                 pass
-                    time.sleep(0.3)
+                    time.sleep(0.25)
         except Exception:
             pass
 
@@ -174,7 +177,7 @@ def get_trust_buy_7d_map():
     return trust_1d, trust_7d
 
 def run_screener():
-    print("📡 [Screener V2.8] 啟動全自動獵股漏斗 (3 -> 1 -> 2 全產業順勢篩選)...")
+    print("📡 [Screener V2.8] 啟動全自動獵股漏斗 (3 -> 1 -> 2 全產業 + 嚴格雙RSI/KD/MACD共振)...")
     profiles = get_company_profiles()
     rev_map = get_revenue_map()
     trust_1d_map, trust_7d_map = get_trust_buy_7d_map()
@@ -187,7 +190,7 @@ def run_screener():
         if not p:
             continue
 
-        # 💡 步驟 3：投信 7 日累積鎖碼過濾 (先用法人買盤淘汰全市場無資金照顧之標的)
+        # 步驟 3：投信 7 日累積鎖碼過濾 (中型股>=100張, 中大型股>=250張, 且最新日買超>=0)
         cap = p["cap"]
         lots_7d = trust_7d_map.get(code, 0)
         lots_1d = trust_1d_map.get(code, 0)
@@ -198,11 +201,11 @@ def run_screener():
         if lots_1d < 0:
             continue
 
-        # 💡 步驟 1：股本規模過濾 (20億 ~ 90億，不限產業，全面捕捉資金輪動)
+        # 步驟 1：股本規模 20億 ~ 90億 (不限產業，順勢追蹤資金輪動)
         if not (20.0 <= cap <= 90.0):
             continue
 
-        # 💡 步驟 2：月營收 YoY > 20% (實質業績成長保護)
+        # 步驟 2：月營收 YoY > 20%
         yoy = rev_map.get(code, None)
         if yoy is None or yoy <= 20.0:
             continue
@@ -213,17 +216,18 @@ def run_screener():
             "ticker": f"{code}{p['market']}",
             "cap": cap,
             "industry": p["industry"],
-            "trust_buy": lots_1d,      # 相容欄位：最新單日投信買超
-            "trust_1d": lots_1d,       # 最新單日投信買超
-            "trust_7d": lots_7d,       # 近 7 日累積投信買超 (核心排序依據)
+            "trust_buy": lots_1d,
+            "trust_1d": lots_1d,
+            "trust_7d": lots_7d,
             "rev_yoy": yoy
         })
 
-    print(f"🔎 通過 3 -> 1 -> 2 漏斗共 {len(funnel_candidates)} 檔，開始進行量縮深蹲檢驗...")
+    print(f"🔎 通過 3 -> 1 -> 2 漏斗共 {len(funnel_candidates)} 檔，開始進行量縮深蹲與嚴格技術指標檢驗...")
 
     results = []
     squat_count = 0
-    today_str = datetime.date.today().strftime("%Y-%m-%d")
+    now_tw = datetime.datetime.now(TW_TZ)
+    today_str = now_tw.strftime("%Y-%m-%d")
 
     for item in funnel_candidates:
         ticker = item["ticker"]
@@ -240,16 +244,22 @@ def run_screener():
             df['VOL_MA5'] = df['Volume'].rolling(5).mean()
             df['VOL_MA20'] = df['Volume'].rolling(20).mean()
 
-            # 1. RSI (14)
+            # 💡 1. 雙週期 RSI：同時計算 5日 RSI (RSI5) 與 14日 RSI (RSI14)
             delta = df['Close'].diff()
             gain = delta.clip(lower=0)
             loss = -delta.clip(upper=0)
-            avg_gain = gain.ewm(com=13, adjust=False).mean()
-            avg_loss = loss.ewm(com=13, adjust=False).mean()
-            rs = avg_gain / (avg_loss + 1e-9)
-            df['RSI14'] = 100 - (100 / (1 + rs))
 
-            # 2. KD (9, 3, 3)
+            avg_gain5 = gain.ewm(com=4, adjust=False).mean()
+            avg_loss5 = loss.ewm(com=4, adjust=False).mean()
+            rs5 = avg_gain5 / (avg_loss5 + 1e-9)
+            df['RSI5'] = 100 - (100 / (1 + rs5))
+
+            avg_gain14 = gain.ewm(com=13, adjust=False).mean()
+            avg_loss14 = loss.ewm(com=13, adjust=False).mean()
+            rs14 = avg_gain14 / (avg_loss14 + 1e-9)
+            df['RSI14'] = 100 - (100 / (1 + rs14))
+
+            # 💡 2. KD (9, 3, 3)
             low9 = df['Low'].rolling(9).min()
             high9 = df['High'].rolling(9).max()
             rsv = (df['Close'] - low9) / (high9 - low9 + 1e-9) * 100
@@ -262,7 +272,7 @@ def run_screener():
             df['K'] = k_list[1:]
             df['D'] = d_list[1:]
 
-            # 3. MACD (12, 26, 9)
+            # 💡 3. MACD (12, 26, 9)
             ema12 = df['Close'].ewm(span=12, adjust=False).mean()
             ema26 = df['Close'].ewm(span=26, adjust=False).mean()
             df['DIF'] = ema12 - ema26
@@ -278,10 +288,14 @@ def run_screener():
             vol = float(latest['Volume'])
             ma5, ma10, ma20 = float(latest['MA5']), float(latest['MA10']), float(latest['MA20'])
             vol_ma5, vol_ma20 = float(latest['VOL_MA5']), float(latest['VOL_MA20'])
-            rsi_val = float(latest['RSI14'])
+            rsi5_val = float(latest['RSI5'])
+            rsi14_val = float(latest['RSI14'])
             k_val, d_val = float(latest['K']), float(latest['D'])
             prev_k = float(prev['K'])
-            dif_val, osc_val, prev_osc = float(latest['DIF']), float(latest['OSC']), float(prev['OSC'])
+            dif_val = float(latest['DIF'])
+            macd_sig_val = float(latest['MACD_SIG'])
+            osc_val = float(latest['OSC'])
+            prev_osc = float(prev['OSC'])
 
             cond_trend = (ma5 > ma10) and (ma10 > ma20) and (ma20 > float(df['MA20'].iloc[-4]))
             touch_10 = (low <= ma10 * 1.018) and (close >= ma10 * 0.99)
@@ -289,13 +303,18 @@ def run_screener():
             cond_support = touch_10 or touch_20
             cond_vol = (vol < vol_ma5) and (vol < vol_ma20)
             cond_k = (abs(close - open_p) / open_p) <= 0.035
-            cond_rsi = (40.0 <= rsi_val <= 70.0)
+
+            # 💡【嚴格修正 1】：RSI 雙週期把關 (5T >= 40 且 14T 介於 45~70，徹底排除短線急跌股)
+            cond_rsi = (rsi5_val >= 40.0) and (45.0 <= rsi14_val <= 70.0)
 
             is_squat = cond_trend and cond_support and cond_vol and cond_k and cond_rsi
             support_str = "10MA" if touch_10 else ("20MA" if touch_20 else "未回踩")
 
-            cond_macd_res = (dif_val > 0) and ((osc_val > prev_osc) or (osc_val > 0))
-            cond_kd_res = (30.0 <= k_val <= 65.0) and ((k_val > prev_k) or (k_val >= d_val))
+            # 💡【嚴格修正 2】：MACD 必須零軸上 (DIF>0 且 MACD>0) 且 柱狀體動能遞增 (今日OSC > 昨日OSC)，排除紅柱萎縮！
+            cond_macd_res = (dif_val > 0) and (macd_sig_val > 0) and (osc_val > prev_osc)
+
+            # 💡【嚴格修正 3】：KD 必須同時滿足 K>=D (真金叉) 且 今日K > 昨日K (勾頭向上)，排除死叉與下彎！
+            cond_kd_res = (30.0 <= k_val <= 70.0) and (k_val > prev_k) and (k_val >= d_val)
 
             if cond_macd_res and cond_kd_res:
                 grade_badge = "👑 頂級共振 (S級)"
@@ -307,8 +326,17 @@ def run_screener():
                 grade_badge = "🟢 標準深蹲 (B級)"
                 grade_rank = 1
 
-            kd_desc = f"K={k_val:.1f} (打勾/金叉)" if cond_kd_res else f"K={k_val:.1f} (整理中)"
-            macd_desc = "零軸上翻紅/收斂" if cond_macd_res else "動能整理中"
+            if cond_kd_res:
+                kd_desc = f"K={k_val:.1f}>D={d_val:.1f} (金叉向上✅)"
+            elif k_val < d_val:
+                kd_desc = f"K={k_val:.1f}<D={d_val:.1f} (死叉整理)"
+            else:
+                kd_desc = f"K={k_val:.1f}, D={d_val:.1f} (彎頭整理)"
+
+            if cond_macd_res:
+                macd_desc = f"OSC={osc_val:.2f} (零軸上遞增✅)"
+            else:
+                macd_desc = f"OSC={osc_val:.2f} (柱狀體收斂/整理)"
 
             if is_squat:
                 squat_count += 1
@@ -319,7 +347,8 @@ def run_screener():
                 "right_trigger": round(high, 1),
                 "support": support_str,
                 "is_squat": bool(is_squat),
-                "rsi": round(rsi_val, 1),
+                "rsi": round(rsi14_val, 1),
+                "rsi5": round(rsi5_val, 1),
                 "kd_desc": kd_desc,
                 "macd_desc": macd_desc,
                 "grade_badge": grade_badge,
@@ -329,11 +358,10 @@ def run_screener():
         except Exception:
             pass
 
-    # 嚴格依照回測邏輯排序：1.符合深蹲 -> 2.投信7日累積買超張數(由大到小) -> 3.星級評等
     results.sort(key=lambda x: (x.get("is_squat", False), x.get("trust_7d", 0), x.get("grade_rank", 1)), reverse=True)
 
     report_data = {
-        "update_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "update_time": now_tw.strftime("%Y-%m-%d %H:%M"),
         "total_funnel": len(funnel_candidates),
         "total_squat": squat_count,
         "stocks": results
@@ -355,7 +383,7 @@ def run_screener():
                 "trust_7d": s.get("trust_7d", 0)
             })
     save_json(PENDING_FILE, pending_list)
-    print(f"✅ [Screener V2.8 完成] 符合深蹲共 {squat_count} 檔，已依投信 7 日累計買超排序寫入戰報！")
+    print(f"✅ [Screener V2.8 完成] 符合深蹲共 {squat_count} 檔，已寫入戰報！")
 
 if __name__ == "__main__":
     run_screener()
