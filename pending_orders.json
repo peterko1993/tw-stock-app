@@ -1,11 +1,11 @@
 [
   {
-    "code": "6257",
-    "name": "矽格",
-    "ticker": "6257.TW",
-    "right_trigger": 266.0,
-    "scan_date": "2026-10-15",
-    "grade_badge": "🎯 強勢動能 (A級)",
-    "trust_7d": 3979
+    "code": "2637",
+    "name": "慧洋-KY",
+    "ticker": "2637.TW",
+    "right_trigger": 103.5,
+    "scan_date": "2026-10-16",
+    "grade_badge": "🟢 標準深蹲 (B級)",
+    "trust_7d": 1713
   }
 ]
