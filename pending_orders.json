@@ -1,11 +1,20 @@
 [
   {
-    "code": "2637",
-    "name": "慧洋-KY",
-    "ticker": "2637.TW",
-    "right_trigger": 102.0,
-    "scan_date": "2026-10-19",
+    "code": "2379",
+    "name": "瑞昱",
+    "ticker": "2379.TW",
+    "right_trigger": 782.0,
+    "scan_date": "2026-10-20",
     "grade_badge": "🟢 標準深蹲 (B級)",
-    "trust_7d": 1932
+    "trust_7d": 2023
+  },
+  {
+    "code": "1477",
+    "name": "聚陽",
+    "ticker": "1477.TW",
+    "right_trigger": 210.0,
+    "scan_date": "2026-10-20",
+    "grade_badge": "🟢 標準深蹲 (B級)",
+    "trust_7d": 189
   }
 ]
