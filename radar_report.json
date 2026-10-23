@@ -1,5 +1,5 @@
 {
-  "update_time": "2026-10-22 22:00",
+  "update_time": "2026-10-23 21:43",
   "total_funnel": 24,
   "total_squat": 0,
   "stocks": [
@@ -65,7 +65,7 @@
       "rsi": 51.3,
       "rsi5": 41.6,
       "kd_desc": "K=38.3<D=50.0 (死叉整理)",
-      "macd_desc": "OSC=-3.24 (柱狀體收斂/整理)",
+      "macd_desc": "OSC=-3.25 (柱狀體收斂/整理)",
       "grade_badge": "🟢 標準深蹲 (B級)",
       "grade_rank": 1
     },
@@ -175,7 +175,7 @@
       "rsi": 37.4,
       "rsi5": 20.4,
       "kd_desc": "K=18.3<D=34.5 (死叉整理)",
-      "macd_desc": "OSC=-16.17 (柱狀體收斂/整理)",
+      "macd_desc": "OSC=-16.18 (柱狀體收斂/整理)",
       "grade_badge": "🟢 標準深蹲 (B級)",
       "grade_rank": 1
     },
@@ -238,7 +238,7 @@
       "right_trigger": 277.0,
       "support": "10MA",
       "is_squat": false,
-      "rsi": 45.5,
+      "rsi": 45.6,
       "rsi5": 48.8,
       "kd_desc": "K=30.6>D=28.5 (金叉向上✅)",
       "macd_desc": "OSC=-1.00 (柱狀體收斂/整理)",
@@ -282,7 +282,7 @@
       "right_trigger": 24.9,
       "support": "10MA",
       "is_squat": false,
-      "rsi": 66.4,
+      "rsi": 66.5,
       "rsi5": 74.2,
       "kd_desc": "K=57.5>D=47.9 (金叉向上✅)",
       "macd_desc": "OSC=-0.06 (零軸上遞增✅)",
@@ -458,7 +458,7 @@
       "right_trigger": 108.0,
       "support": "未回踩",
       "is_squat": false,
-      "rsi": 29.0,
+      "rsi": 29.1,
       "rsi5": 9.0,
       "kd_desc": "K=10.0<D=11.4 (死叉整理)",
       "macd_desc": "OSC=-2.29 (柱狀體收斂/整理)",
