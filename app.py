@@ -21,7 +21,7 @@ PENDING_FILE = "pending_orders.json"
 FEE_RATE = 0.001425 * 0.5
 TAX_RATE = 0.003
 
-# 台灣標準時間 (UTC+8)，解決雲端伺服器時差與早盤 09:00 前誤判休市問題
+# 台灣標準時間 (UTC+8)
 TW_TZ = datetime.timezone(datetime.timedelta(hours=8))
 
 # 2026 年台股官方國定休市日清單 (週一至週五之休市日)
@@ -105,27 +105,20 @@ def save_history_csv(df):
     with open(HISTORY_FILE, "rb") as f:
         push_file_to_github(HISTORY_FILE, f.read())
 
-# ================= 精準檢查今日台股開休市狀態 (修復 09:00 前誤判休市 Bug) =================
+# ================= 精準檢查今日台股開休市狀態 =================
 @st.cache_data(ttl=600)
 def get_market_schedule_status():
-    """
-    回傳 (is_trading_day: bool, phase_msg: str)
-    自動以台灣時間 (UTC+8) 判定週末、國定假日，以及早盤 09:00 前的盤前準備狀態。
-    """
     now_tw = datetime.datetime.now(TW_TZ)
     today_tw = now_tw.date()
     today_str = today_tw.strftime("%Y-%m-%d")
     curr_time = now_tw.time()
 
-    # 1. 週末休市
     if today_tw.weekday() >= 5:
         return False, f"⏸ **【台股休市提醒】今日 ({today_str}) 為週末例假休市，戰報與持股天數暫停推進。**"
 
-    # 2. 國定假日休市
     if today_str in TWSE_HOLIDAYS_2026:
         return False, f"⏸ **【台股休市提醒】今日 ({today_str}) 為台股國定假日休市，戰報與持股天數暫停推進。**"
 
-    # 3. 平日正常開盤日：區分「09:00 前盤前」、「09:00~13:35 盤中」、「13:35 後盤後」
     if curr_time < datetime.time(9, 0):
         return True, f"🕒 **【今日 ({today_str}) 正常開盤・盤前準備中】目前時間 {now_tw.strftime('%H:%M')} 尚未開盤（09:00 開市），下方顯示前一交易日收盤數據。**"
     elif curr_time <= datetime.time(13, 35):
@@ -133,11 +126,11 @@ def get_market_schedule_status():
     else:
         return True, f"✅ **【今日 ({today_str}) 正常開盤・已收盤】16:30 證交所法人買賣超公布後，即可執行今日雷達戰報掃描。**"
 
-# ================= 三維大盤環境風控 (修復櫃買 0.0 與漲跌家數串接 Bug) =================
-@st.cache_data(ttl=900)
+# ================= 三維大盤環境風控 (證交所官方 API 權威校正版) =================
+@st.cache_data(ttl=600)
 def get_comprehensive_market_status():
     status_info = {
-        "twii_c": 0.0, "twii_ma": 0.0, "twii_bull": True,
+        "twii_c": 0.0, "twii_ma": 0.0, "twii_bull": True, "twii_date": "",
         "otc_c": 0.0, "otc_ma": 0.0, "otc_bull": True,
         "up_stocks": 0, "down_stocks": 0, "has_adl": False,
         "env_level": "GREEN",
@@ -145,57 +138,102 @@ def get_comprehensive_market_status():
         "env_desc": "",
         "budget_factor": 1.0
     }
-    # 1. 抓取加權 (^TWII) 與 櫃買 (^TWOII，若失敗則以富櫃50 006201.TWO 作為趨勢備援)
-    try:
-        df_indices = yf.download(["^TWII", "^TWOII", "006201.TWO"], period="3mo", interval="1d", progress=False)
-        if not df_indices.empty:
-            for symbol, key_prefix in [("^TWII", "twii"), ("^TWOII", "otc")]:
-                try:
-                    sub = df_indices.xs(symbol, axis=1, level=1).dropna(how='all') if isinstance(df_indices.columns, pd.MultiIndex) else df_indices.dropna(how='all')
-                    if len(sub) >= 20:
-                        sub['MA20'] = sub['Close'].rolling(20).mean()
-                        last_row = sub.iloc[-1]
-                        c_p = float(last_row['Close'])
-                        ma_p = float(last_row['MA20'])
-                        op_p = float(last_row['Open'])
-                        if c_p > 0:
-                            is_bull = (c_p >= ma_p) or (c_p > op_p * 1.008)
-                            status_info[f"{key_prefix}_c"] = c_p
-                            status_info[f"{key_prefix}_ma"] = ma_p
-                            status_info[f"{key_prefix}_bull"] = is_bull
-                except Exception:
-                    pass
+    headers = {"User-Agent": "Mozilla/5.0"}
+    now_tw = datetime.datetime.now(TW_TZ)
 
-            # 若 ^TWOII 抓不到 (顯示 0.0)，自動使用 006201.TWO (元大富櫃50) 判定櫃買月線多空，避免誤亮黃燈
-            if status_info["otc_c"] <= 0.0:
-                try:
-                    sub_bk = df_indices.xs("006201.TWO", axis=1, level=1).dropna(how='all')
-                    if len(sub_bk) >= 20:
-                        sub_bk['MA20'] = sub_bk['Close'].rolling(20).mean()
-                        last_bk = sub_bk.iloc[-1]
-                        c_bk = float(last_bk['Close'])
-                        ma_bk = float(last_bk['MA20'])
-                        status_info["otc_c"] = c_bk
-                        status_info["otc_ma"] = ma_bk
-                        status_info["otc_bull"] = (c_bk >= ma_bk)
-                except Exception:
-                    pass
+    # ------------------------------------------------------------------
+    # 1. 加權指數 (^TWII)：結合 Yahoo 歷史日 K + 台灣證交所官方 FMTQIK 強制校正
+    # ------------------------------------------------------------------
+    df_twii = pd.DataFrame()
+    try:
+        t_twii = yf.Ticker("^TWII")
+        h_twii = t_twii.history(period="3mo", interval="1d")
+        if not h_twii.empty:
+            if h_twii.index.tz is not None:
+                h_twii.index = h_twii.index.tz_localize(None)
+            h_twii.index = pd.to_datetime(h_twii.index).normalize()
+            df_twii = h_twii[['Open', 'High', 'Low', 'Close']].dropna(subset=['Close']).copy()
+            df_twii = df_twii[~df_twii.index.duplicated(keep='last')]
     except Exception:
         pass
 
-    # 2. 抓取證交所真實上漲/下跌家數 (修復括號漲跌停數字串接成 15229186 的 Bug)
+    # 從台灣證交所官方 FMTQIK 抓取上個月與本月的「發行量加權股價指數」每日真實收盤價，解決 Yahoo 漏日或舊價問題
+    prev_month_dt = (now_tw.replace(day=1) - datetime.timedelta(days=5))
+    for query_dt in [prev_month_dt, now_tw]:
+        d_str = query_dt.strftime("%Y%m%d")
+        try:
+            url_fmt = f"https://www.twse.com.tw/rwd/zh/afterTrading/FMTQIK?date={d_str}&response=json"
+            res_fmt = requests.get(url_fmt, headers=headers, timeout=5)
+            if res_fmt.status_code == 200:
+                j_fmt = res_fmt.json()
+                if j_fmt.get("stat") == "OK" and j_fmt.get("data"):
+                    for row in j_fmt["data"]:
+                        # row[0] 為民國日期 "115/10/28"，row[4] 為「發行量加權股價指數」收盤點數
+                        parts = str(row[0]).strip().split("/")
+                        if len(parts) == 3:
+                            dt_idx = pd.Timestamp(year=int(parts[0]) + 1911, month=int(parts[1]), day=int(parts[2]))
+                            c_val = float(str(row[4]).replace(",", "").strip())
+                            if c_val > 1000:
+                                if not df_twii.empty and dt_idx in df_twii.index:
+                                    df_twii.loc[dt_idx, "Close"] = c_val
+                                else:
+                                    df_twii.loc[dt_idx, ["Open", "High", "Low", "Close"]] = [c_val, c_val, c_val, c_val]
+        except Exception:
+            pass
+
+    # 備援：同時檢查證交所 OpenAPI FMTQIK
+    try:
+        res_open_fmt = requests.get("https://openapi.twse.com.tw/v1/exchangeReport/FMTQIK", headers=headers, timeout=4)
+        if res_open_fmt.status_code == 200:
+            for item in res_open_fmt.json():
+                d_raw = str(item.get("Date", "")).strip()
+                taiex_raw = str(item.get("TAIEX", "") or item.get("發行量加權股價指數", "")).replace(",", "").strip()
+                if len(d_raw) == 7 and d_raw.isdigit() and taiex_raw:
+                    yr = int(d_raw[:3]) + 1911
+                    mo = int(d_raw[3:5])
+                    da = int(d_raw[5:7])
+                    dt_idx = pd.Timestamp(year=yr, month=mo, day=da)
+                    c_val = float(taiex_raw)
+                    if c_val > 1000:
+                        if not df_twii.empty and dt_idx in df_twii.index:
+                            df_twii.loc[dt_idx, "Close"] = c_val
+                        else:
+                            df_twii.loc[dt_idx, ["Open", "High", "Low", "Close"]] = [c_val, c_val, c_val, c_val]
+    except Exception:
+        pass
+
+    # 2. 抓取證交所 MI_INDEX 最新盤後統計 (同時取得最新加權收盤價 & 上市漲跌家數)
     try:
         url_twse_stat = "https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?response=json&type=MS"
-        res_stat = requests.get(url_twse_stat, headers={"User-Agent": "Mozilla/5.0"}, timeout=4)
+        res_stat = requests.get(url_twse_stat, headers=headers, timeout=4)
         if res_stat.status_code == 200:
             data_stat = res_stat.json()
+            stat_date_str = str(data_stat.get("date", "")).strip()
+            stat_dt = None
+            if len(stat_date_str) == 8 and stat_date_str.isdigit():
+                stat_dt = pd.Timestamp(year=int(stat_date_str[:4]), month=int(stat_date_str[4:6]), day=int(stat_date_str[6:8]))
+
             for t in data_stat.get("tables", []):
                 t_title = str(t.get("title", ""))
+                # (A) 擷取「發行量加權股價指數」最新收盤價
+                for row in t.get("data", []):
+                    if len(row) >= 2 and "發行量加權股價指數" in str(row[0]):
+                        idx_str = str(row[1]).replace(",", "").strip()
+                        try:
+                            idx_val = float(idx_str)
+                            if idx_val > 1000 and stat_dt is not None:
+                                if not df_twii.empty and stat_dt in df_twii.index:
+                                    df_twii.loc[stat_dt, "Close"] = idx_val
+                                else:
+                                    df_twii.loc[stat_dt, ["Open", "High", "Low", "Close"]] = [idx_val, idx_val, idx_val, idx_val]
+                        except Exception:
+                            pass
+
+                # (B) 擷取上市一般股票上漲/下跌家數
                 if "漲跌證券數合計" in t_title:
                     for row in t.get("data", []):
                         if len(row) >= 3:
                             label = str(row[0]).strip()
-                            # row[2] 為「股票」欄位 (排除權證)，格式如 "512(15)"，只取括號 '(' 前方的數字
                             stock_cell = str(row[2]).split("(")[0].replace(",", "").strip()
                             if "上漲" in label and stock_cell.isdigit():
                                 val = int(stock_cell)
@@ -209,6 +247,43 @@ def get_comprehensive_market_status():
                 status_info["has_adl"] = True
     except Exception:
         pass
+
+    # 計算加權指數最新收盤與 20MA (月線)
+    if not df_twii.empty:
+        df_twii = df_twii.sort_index()
+        df_twii = df_twii[~df_twii.index.duplicated(keep='last')]
+        if len(df_twii) >= 20:
+            df_twii['MA20'] = df_twii['Close'].rolling(20).mean()
+            last_row = df_twii.iloc[-1]
+            c_p = float(last_row['Close'])
+            ma_p = float(last_row['MA20'])
+            op_p = float(last_row['Open'])
+            status_info["twii_c"] = c_p
+            status_info["twii_ma"] = ma_p
+            status_info["twii_bull"] = (c_p >= ma_p) or (c_p > op_p * 1.008)
+            status_info["twii_date"] = df_twii.index[-1].strftime("%Y-%m-%d")
+
+    # ------------------------------------------------------------------
+    # 3. 櫃買指數 (^TWOII，若失敗則以 006201.TWO 富櫃50 作為備援)
+    # ------------------------------------------------------------------
+    for otc_sym in ["^TWOII", "006201.TWO"]:
+        if status_info["otc_c"] > 0:
+            break
+        try:
+            h_otc = yf.Ticker(otc_sym).history(period="3mo", interval="1d")
+            if not h_otc.empty and len(h_otc) >= 20:
+                h_otc = h_otc.dropna(subset=['Close']).copy()
+                h_otc['MA20'] = h_otc['Close'].rolling(20).mean()
+                last_otc = h_otc.iloc[-1]
+                c_otc = float(last_otc['Close'])
+                ma_otc = float(last_otc['MA20'])
+                op_otc = float(last_otc['Open'])
+                if c_otc > 0:
+                    status_info["otc_c"] = c_otc
+                    status_info["otc_ma"] = ma_otc
+                    status_info["otc_bull"] = (c_otc >= ma_otc) or (c_otc > op_otc * 1.008)
+        except Exception:
+            pass
 
     twii_ok = status_info["twii_bull"]
     otc_ok = status_info["otc_bull"]
@@ -433,12 +508,13 @@ is_trading_today, schedule_msg = get_market_schedule_status()
 st.info(schedule_msg)
 
 mkt_env = get_comprehensive_market_status()
+twii_date_tag = f" [基準日: {mkt_env['twii_date']}]" if mkt_env.get("twii_date") else ""
 if mkt_env["env_level"] == "GREEN":
-    st.success(f"**{mkt_env['env_title']}** ｜ 加權：{mkt_env['twii_c']:,.0f} (月線 {mkt_env['twii_ma']:,.0f}) ｜ 櫃買指標：{mkt_env['otc_c']:,.1f} (月線 {mkt_env['otc_ma']:,.1f})\n\n{mkt_env['env_desc']}")
+    st.success(f"**{mkt_env['env_title']}**{twii_date_tag} ｜ 加權：{mkt_env['twii_c']:,.0f} (月線 {mkt_env['twii_ma']:,.0f}) ｜ 櫃買指標：{mkt_env['otc_c']:,.1f} (月線 {mkt_env['otc_ma']:,.1f})\n\n{mkt_env['env_desc']}")
 elif mkt_env["env_level"] == "YELLOW":
-    st.warning(f"**{mkt_env['env_title']}** ｜ 加權：{mkt_env['twii_c']:,.0f} ｜ 櫃買指標：{mkt_env['otc_c']:,.1f}\n\n⚠️ {mkt_env['env_desc']}")
+    st.warning(f"**{mkt_env['env_title']}**{twii_date_tag} ｜ 加權：{mkt_env['twii_c']:,.0f} (月線 {mkt_env['twii_ma']:,.0f}) ｜ 櫃買指標：{mkt_env['otc_c']:,.1f} (月線 {mkt_env['otc_ma']:,.1f})\n\n⚠️ {mkt_env['env_desc']}")
 else:
-    st.error(f"**{mkt_env['env_title']}** ｜ 加權：{mkt_env['twii_c']:,.0f} (月線 {mkt_env['twii_ma']:,.0f})\n\n🛑 {mkt_env['env_desc']}")
+    st.error(f"**{mkt_env['env_title']}**{twii_date_tag} ｜ 加權：{mkt_env['twii_c']:,.0f} (月線 {mkt_env['twii_ma']:,.0f}) ｜ 櫃買指標：{mkt_env['otc_c']:,.1f} (月線 {mkt_env['otc_ma']:,.1f})\n\n🛑 {mkt_env['env_desc']}")
 
 cap_state = get_portfolio_capital_state(float(base_capital_input), mkt_env["env_level"])
 
@@ -460,8 +536,11 @@ with tab_radar:
         btn_manual_scan = st.button("⚡ 手動立即掃描雷達", type="primary", use_container_width=True)
 
     if btn_manual_scan:
-        with st.spinner("🚀 正在統計近 7 個交易日投信累積買超，並以嚴格雙 RSI / KD / MACD 規則產出雷達戰報... (約需 15~25 秒)"):
+        with st.spinner("🚀 正在同步刷新證交所大盤點數、統計近 7 日投信買超，並產出嚴格技術雷達戰報... (約需 15~25 秒)"):
             try:
+                # 強制清除大盤與行事曆快取，確保重新抓取證交所最新指數
+                st.cache_data.clear()
+
                 import tracker
                 import screener
                 importlib.reload(tracker)
@@ -480,7 +559,7 @@ with tab_radar:
                     with open(HISTORY_FILE, "rb") as f:
                         push_file_to_github(HISTORY_FILE, f.read())
 
-                st.success("✅ 近 7 日投信累積買超統計與 V2.8 嚴格技術雷達掃描已完成，已同步至 GitHub！")
+                st.success("✅ 大盤官方指數刷新、近 7 日投信累積買超與 V2.8 嚴格雷達掃描已完成！")
                 st.rerun()
             except Exception as e:
                 st.error(f"❌ 手動掃描異常: {e}")
@@ -1106,7 +1185,7 @@ with tab_tracker:
     else:
         st.info("尚無結案交易紀錄，等待排程每日 16:30 自動追蹤結算，或可使用上方「手動平倉結案」自訂出場。")
 
-# ================= TAB 2: 自選名單批次體檢 (同步嚴格雙RSI/KD/MACD) =================
+# ================= TAB 2: 自選名單批次體檢 =================
 with tab_batch:
     st.subheader("📋 自選股今日深蹲訊號掃描 (V2.8 嚴格共振版)")
     st.write(f"目前自選名單中共有 **{len(st.session_state.watchlist)}** 檔標的（要求 `RSI(5) >= 40` 且 `45 <= RSI(14) <= {int(rsi_upper_limit)}`）。")
@@ -1327,7 +1406,7 @@ with tab_single:
                 fig.update_layout(xaxis_rangeslider_visible=False, height=420, margin=dict(l=10, r=10, t=10, b=10))
                 st.plotly_chart(fig, use_container_width=True)
 
-# ================= TAB 5: 自選股票清單總覽 (同步嚴格雙RSI/KD/MACD) =================
+# ================= TAB 5: 自選股票清單總覽 =================
 with tab_watchlist:
     st.subheader("📋 自選股票清單總覽儀表板 (Watchlist Overview V2.8)")
     
@@ -1480,7 +1559,6 @@ with tab_watchlist:
                     elif c_today > ma10: squat_tag = "🚀 均線上強勢"
                     else: squat_tag = "🔻 均線反壓整理"
 
-                    # 嚴格 MACD 與 KD 共振判定
                     cond_macd_res = (dif_val > 0) and (macd_sig_val > 0) and (osc_val > prev_osc)
                     cond_kd_res = (30.0 <= k_val <= 70.0) and (k_val > prev_k) and (k_val >= d_val)
 
